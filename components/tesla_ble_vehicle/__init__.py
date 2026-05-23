@@ -16,7 +16,6 @@ from esphome.const import (
     CONF_DEVICE_ID,
 )
 from esphome import automation
-from esphome.core.entity_helpers import inherit_property_from
 
 
 CODEOWNERS = ["@yoziru"]
@@ -263,13 +262,19 @@ def get_device_class_const(component_module, device_class_str):
     return getattr(component_module, f"DEVICE_CLASS_{device_class_str.upper()}", None)
 
 
-async def create_binary_sensor(var, definition):
+def apply_device_id(config, device_id):
+    if device_id is not None:
+        config[CONF_DEVICE_ID] = device_id
+
+
+async def create_binary_sensor(var, definition, device_id=None):
     """Create a binary sensor and register with TeslaBLEVehicle using generic setter."""
     config = {
         CONF_ID: cv.declare_id(binary_sensor.BinarySensor)(f"tesla_{definition['id']}_sensor"),
         CONF_NAME: definition["name"],
         CONF_DISABLED_BY_DEFAULT: definition.get("disabled_by_default", False),
     }
+    apply_device_id(config, device_id)
     if "icon" in definition:
         config[CONF_ICON] = definition["icon"]
     if "device_class" in definition:
@@ -283,7 +288,7 @@ async def create_binary_sensor(var, definition):
     return sens
 
 
-async def create_sensor(var, definition):
+async def create_sensor(var, definition, device_id=None):
     """Create a sensor and register with TeslaBLEVehicle using generic setter."""
     config = {
         CONF_ID: cv.declare_id(sensor.Sensor)(f"tesla_{definition['id']}_sensor"),
@@ -291,7 +296,7 @@ async def create_sensor(var, definition):
         CONF_DISABLED_BY_DEFAULT: definition.get("disabled_by_default", False),
         CONF_FORCE_UPDATE: False,
     }
-    # config = inherit_property_from(config, CONF_DEVICE_ID, var)
+    apply_device_id(config, device_id)
 
     if "icon" in definition:
         config[CONF_ICON] = definition["icon"]
@@ -310,7 +315,7 @@ async def create_sensor(var, definition):
     return sens
 
 
-async def create_text_sensor(var, definition):
+async def create_text_sensor(var, definition, device_id=None):
     """Create a text sensor and register with TeslaBLEVehicle using generic setter."""
     config = {
         CONF_ID: cv.declare_id(text_sensor.TextSensor)(f"tesla_{definition['id']}_sensor"),
@@ -318,6 +323,7 @@ async def create_text_sensor(var, definition):
         CONF_DISABLED_BY_DEFAULT: definition.get("disabled_by_default", False),
         CONF_FORCE_UPDATE: False,
     }
+    apply_device_id(config, device_id)
     if "icon" in definition:
         config[CONF_ICON] = definition["icon"]
     
@@ -327,13 +333,14 @@ async def create_text_sensor(var, definition):
     return sens
 
 
-async def create_button(var, definition):
+async def create_button(var, definition, device_id=None):
     """Create a button and register with TeslaBLEVehicle."""
     config = {
         CONF_ID: cv.declare_id(definition["class"])(f"tesla_{definition['id']}_button"),
         CONF_NAME: definition["name"],
         CONF_DISABLED_BY_DEFAULT: definition.get("disabled_by_default", False),
     }
+    apply_device_id(config, device_id)
     if "icon" in definition:
         config[CONF_ICON] = definition["icon"]
     if "entity_category" in definition:
@@ -347,7 +354,7 @@ async def create_button(var, definition):
     return btn
 
 
-async def create_switch(var, definition):
+async def create_switch(var, definition, device_id=None):
     """Create a switch and register with TeslaBLEVehicle."""
     config = {
         CONF_ID: cv.declare_id(definition["class"])(f"tesla_{definition['id']}_switch"),
@@ -355,6 +362,7 @@ async def create_switch(var, definition):
         CONF_DISABLED_BY_DEFAULT: definition.get("disabled_by_default", False),
         CONF_RESTORE_MODE: switch.RESTORE_MODES['RESTORE_DEFAULT_OFF'],
     }
+    apply_device_id(config, device_id)
     if "icon" in definition:
         config[CONF_ICON] = definition["icon"]
     
@@ -365,7 +373,7 @@ async def create_switch(var, definition):
     return sw
 
 
-async def create_number(var, definition, config):
+async def create_number(var, definition, config, device_id=None):
     """Create a number and register with TeslaBLEVehicle."""
     # Handle dynamic max value from config
     max_val = definition["max"]
@@ -378,6 +386,7 @@ async def create_number(var, definition, config):
         CONF_DISABLED_BY_DEFAULT: definition.get("disabled_by_default", False),
         CONF_MODE: number.NUMBER_MODES['AUTO'],
     }
+    apply_device_id(num_config, device_id)
     if "icon" in definition:
         num_config[CONF_ICON] = definition["icon"]
     if "unit" in definition:
@@ -395,13 +404,14 @@ async def create_number(var, definition, config):
     return num
 
 
-async def create_lock(var, definition):
+async def create_lock(var, definition, device_id=None):
     """Create a lock and register with TeslaBLEVehicle."""
     config = {
         CONF_ID: cv.declare_id(definition["class"])(f"tesla_{definition['id']}_lock"),
         CONF_NAME: definition["name"],
         CONF_DISABLED_BY_DEFAULT: definition.get("disabled_by_default", False),
     }
+    apply_device_id(config, device_id)
     if "icon" in definition:
         config[CONF_ICON] = definition["icon"]
     
@@ -413,13 +423,14 @@ async def create_lock(var, definition):
     return lck
 
 
-async def create_cover(var, definition):
+async def create_cover(var, definition, device_id=None):
     """Create a cover and register with TeslaBLEVehicle."""
     config = {
         CONF_ID: cv.declare_id(definition["class"])(f"tesla_{definition['id']}_cover"),
         CONF_NAME: definition["name"],
         CONF_DISABLED_BY_DEFAULT: definition.get("disabled_by_default", False),
     }
+    apply_device_id(config, device_id)
     if "icon" in definition:
         config[CONF_ICON] = definition["icon"]
     if "device_class" in definition:
@@ -433,7 +444,7 @@ async def create_cover(var, definition):
     return cvr
 
 
-async def create_climate_entity(var, definition):
+async def create_climate_entity(var, definition, device_id=None):
     """Create a climate entity and register with TeslaBLEVehicle."""
     from esphome.components.climate import CONF_VISUAL
     
@@ -445,6 +456,7 @@ async def create_climate_entity(var, definition):
         CONF_VISUAL: {},
         CONF_ACCURACY_DECIMALS: 1,
     }
+    apply_device_id(config, device_id)
     
     clm = cg.new_Pvariable(config[CONF_ID])
     await climate.register_climate(clm, config)
@@ -460,10 +472,6 @@ async def create_climate_entity(var, definition):
 
 async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
-
-    if CONF_DEVICE_ID in config:
-        device = await cg.get_variable(config[CONF_DEVICE_ID])
-        cg.add(var.set_device_id(device))
 
     await cg.register_component(var, config)
     await ble_client.register_ble_node(var, config)
@@ -483,38 +491,40 @@ async def to_code(config):
     cg.add(var.set_infotainment_poll_interval_awake(config[CONF_INFOTAINMENT_POLL_INTERVAL_AWAKE] * 1000))
     cg.add(var.set_infotainment_poll_interval_active(config[CONF_INFOTAINMENT_POLL_INTERVAL_ACTIVE] * 1000))
     cg.add(var.set_infotainment_sleep_timeout(config[CONF_INFOTAINMENT_SLEEP_TIMEOUT] * 1000))
+
+    device_id = config.get(CONF_DEVICE_ID)
     
     # Create all sensors using data-driven approach with generic setters
     for definition in BINARY_SENSORS:
-        await create_binary_sensor(var, definition)
+        await create_binary_sensor(var, definition, device_id)
     
     for definition in SENSORS:
-        await create_sensor(var, definition)
+        await create_sensor(var, definition, device_id)
     
     for definition in TEXT_SENSORS:
-        await create_text_sensor(var, definition)
+        await create_text_sensor(var, definition, device_id)
     
     for definition in BUTTONS:
-        await create_button(var, definition)
+        await create_button(var, definition, device_id)
     
     # Switches - data-driven approach
     for definition in SWITCHES:
-        await create_switch(var, definition)
+        await create_switch(var, definition, device_id)
 
     # Numbers - data-driven approach
     for definition in NUMBERS:
-        await create_number(var, definition, config)
+        await create_number(var, definition, config, device_id)
 
     # Locks - combined entities for doors and charge port
     for definition in LOCKS:
-        await create_lock(var, definition)
+        await create_lock(var, definition, device_id)
 
     # Covers - combined entities for trunk, frunk, windows
     for definition in COVERS:
-        await create_cover(var, definition)
+        await create_cover(var, definition, device_id)
 
     # Climate - HVAC control
-    await create_climate_entity(var, CLIMATE)
+    await create_climate_entity(var, CLIMATE, device_id)
 
 
 # =============================================================================
