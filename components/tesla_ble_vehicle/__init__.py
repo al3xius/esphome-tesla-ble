@@ -239,7 +239,7 @@ CONFIG_SCHEMA = (
             cv.GenerateID(CONF_ID): cv.declare_id(TeslaBLEVehicle),
             cv.Required(CONF_VIN): cv.string,
             cv.Optional(CONF_CHARGING_AMPS_MAX, default=32): cv.int_range(min=1, max=48),
-            cv.Optional(CONF_DEVICE_ID): cv.use_id(Device),
+            # cv.Optional(CONF_DEVICE_ID): cv.use_id(Device),
             cv.Optional(CONF_ROLE, default="DRIVER"): cv.enum(TESLA_ROLES, upper=True),
             # Polling intervals (in seconds)
             cv.Optional(CONF_VCSEC_POLL_INTERVAL, default=10): cv.int_range(min=5, max=300),
@@ -292,7 +292,7 @@ async def create_sensor(var, definition):
         CONF_DISABLED_BY_DEFAULT: definition.get("disabled_by_default", False),
         CONF_FORCE_UPDATE: False,
     }
-    config = inherit_property_from(config, CONF_DEVICE_ID, var)
+    # config = inherit_property_from(config, CONF_DEVICE_ID, var)
 
     if "icon" in definition:
         config[CONF_ICON] = definition["icon"]
@@ -462,9 +462,9 @@ async def create_climate_entity(var, definition):
 async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
 
-    if CONF_DEVICE_ID in config:
-        device = await cg.get_variable(config[CONF_DEVICE_ID])
-        cg.add(var.set_device(device))
+    # if CONF_DEVICE_ID in config:
+    #     device = await cg.get_variable(config[CONF_DEVICE_ID])
+    #     cg.add(var.set_device(device))
 
     await cg.register_component(var, config)
     await ble_client.register_ble_node(var, config)
