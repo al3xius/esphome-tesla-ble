@@ -463,7 +463,7 @@ async def to_code(config):
 
     if CONF_DEVICE_ID in config:
         device = await cg.get_variable(config[CONF_DEVICE_ID])
-        cg.add(var.set_device(device))
+        cg.add(var.set_device_id(device))
 
     await cg.register_component(var, config)
     await ble_client.register_ble_node(var, config)
