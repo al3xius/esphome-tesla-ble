@@ -461,9 +461,9 @@ async def create_climate_entity(var, definition):
 async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
 
-    # if CONF_DEVICE_ID in config:
-    #     device = await cg.get_variable(config[CONF_DEVICE_ID])
-    #     cg.add(var.set_device(device))
+    if CONF_DEVICE_ID in config:
+        device = await cg.get_variable(config[CONF_DEVICE_ID])
+        cg.add(var.set_device(device))
 
     await cg.register_component(var, config)
     await ble_client.register_ble_node(var, config)
