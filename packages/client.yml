@@ -1,7 +1,5 @@
 substitutions:
-  ble_mac_address: !secret ble_mac_address
-  tesla_vin: !secret tesla_vin
-  charging_amps_max: "32"
+  charging_amps_max: "16"
   # Polling interval defaults (can be overridden in main config)
   vcsec_poll_interval: "10"
   infotainment_poll_interval_awake: "30" 
@@ -30,6 +28,7 @@ tesla_ble_vehicle:
 # BLE sensors from the standard ble_client platform
 sensor:
   - platform: ble_client
+    device_id: ${device_id}
     type: rssi
     ble_client_id: ble_tesla_id
     name: "BLE Signal"
@@ -39,6 +38,7 @@ sensor:
 
 switch:
   - platform: ble_client
+    device_id: ${device_id}
     ble_client_id: ble_tesla_id
     name: "BLE Connection"
     entity_category: diagnostic
