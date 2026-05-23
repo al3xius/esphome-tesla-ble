@@ -17,7 +17,6 @@ from esphome.const import (
 )
 from esphome import automation
 from esphome.core.entity_helpers import inherit_property_from
-from esphome.components.device import Device
 
 
 CODEOWNERS = ["@yoziru"]
