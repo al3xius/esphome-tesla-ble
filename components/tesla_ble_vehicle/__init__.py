@@ -13,8 +13,11 @@ from esphome.const import (
     CONF_NAME,
     CONF_RESTORE_MODE,
     CONF_UNIT_OF_MEASUREMENT,
+    CONF_DEVICE_ID,
 )
 from esphome import automation
+from esphome.core.entity_helpers import inherit_property_from
+from esphome.components.device import Device
 
 
 CODEOWNERS = ["@yoziru"]
@@ -235,10 +238,11 @@ CONFIG_SCHEMA = (
             cv.GenerateID(CONF_ID): cv.declare_id(TeslaBLEVehicle),
             cv.Required(CONF_VIN): cv.string,
             cv.Optional(CONF_CHARGING_AMPS_MAX, default=32): cv.int_range(min=1, max=48),
+            cv.Optional(CONF_DEVICE_ID): cv.use_id(Device),
             cv.Optional(CONF_ROLE, default="DRIVER"): cv.enum(TESLA_ROLES, upper=True),
             # Polling intervals (in seconds)
             cv.Optional(CONF_VCSEC_POLL_INTERVAL, default=10): cv.int_range(min=5, max=300),
-            cv.Optional(CONF_INFOTAINMENT_POLL_INTERVAL_AWAKE, default=30): cv.int_range(min=10, max=600), 
+            cv.Optional(CONF_INFOTAINMENT_POLL_INTERVAL_AWAKE, default=30): cv.int_range(min=10, max=600),
             cv.Optional(CONF_INFOTAINMENT_POLL_INTERVAL_ACTIVE, default=10): cv.int_range(min=5, max=120),
             cv.Optional(CONF_INFOTAINMENT_SLEEP_TIMEOUT, default=660): cv.int_range(min=60, max=3600),
         },
@@ -287,6 +291,8 @@ async def create_sensor(var, definition):
         CONF_DISABLED_BY_DEFAULT: definition.get("disabled_by_default", False),
         CONF_FORCE_UPDATE: False,
     }
+    config = inherit_property_from(config, CONF_DEVICE_ID, var)
+
     if "icon" in definition:
         config[CONF_ICON] = definition["icon"]
     if "unit" in definition:
@@ -454,6 +460,11 @@ async def create_climate_entity(var, definition):
 
 async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
+
+    if CONF_DEVICE_ID in config:
+        device = await cg.get_variable(config[CONF_DEVICE_ID])
+        cg.add(var.set_device(device))
+
     await cg.register_component(var, config)
     await ble_client.register_ble_node(var, config)
 
