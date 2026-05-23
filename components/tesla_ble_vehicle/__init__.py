@@ -71,6 +71,7 @@ SetChargingAmpsAction = tesla_ble_vehicle_ns.class_("SetChargingAmpsAction", aut
 SetChargingLimitAction = tesla_ble_vehicle_ns.class_("SetChargingLimitAction", automation.Action)
 
 # Configuration constants
+CONF_DEVICE_ID = "device_id"
 CONF_VIN = "vin"
 CONF_CHARGING_AMPS_MAX = "charging_amps_max"
 CONF_ROLE = "role"
