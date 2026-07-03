@@ -34,7 +34,7 @@ sensor:
     ble_client_id: ble_tesla_id
     name: "BLE Signal"
     icon: mdi:bluetooth
-    update_interval: 60s
+    update_interval: 10s
     entity_category: diagnostic
 
 switch:
