@@ -13,6 +13,7 @@ from esphome.const import (
     CONF_NAME,
     CONF_RESTORE_MODE,
     CONF_UNIT_OF_MEASUREMENT,
+    ENTITY_CATEGORY_DIAGNOSTIC,
     CONF_DEVICE_ID,
 )
 from esphome import automation
@@ -125,11 +126,12 @@ BINARY_SENSORS = [
     {"id": "door_driver_rear", "name": "Door Driver Rear", "icon": "mdi:car-door", "device_class": "door", "disabled_by_default": True},
     {"id": "door_passenger_front", "name": "Door Passenger Front", "icon": "mdi:car-door", "device_class": "door", "disabled_by_default": True},
     {"id": "door_passenger_rear", "name": "Door Passenger Rear", "icon": "mdi:car-door", "device_class": "door", "disabled_by_default": True},
-    {"id": "window_driver_front", "name": "Window Driver Front", "icon": "mdi:car-window-side", "device_class": "window", "disabled_by_default": True},
-    {"id": "window_driver_rear", "name": "Window Driver Rear", "icon": "mdi:car-window-side", "device_class": "window", "disabled_by_default": True},
-    {"id": "window_passenger_front", "name": "Window Passenger Front", "icon": "mdi:car-window-side", "device_class": "window", "disabled_by_default": True},
-    {"id": "window_passenger_rear", "name": "Window Passenger Rear", "icon": "mdi:car-window-side", "device_class": "window", "disabled_by_default": True},
+    {"id": "window_driver_front", "name": "Window Driver Front", "icon": "mdi:car-door", "device_class": "window", "disabled_by_default": True},
+    {"id": "window_driver_rear", "name": "Window Driver Rear", "icon": "mdi:car-door", "device_class": "window", "disabled_by_default": True},
+    {"id": "window_passenger_front", "name": "Window Passenger Front", "icon": "mdi:car-door", "device_class": "window", "disabled_by_default": True},
+    {"id": "window_passenger_rear", "name": "Window Passenger Rear", "icon": "mdi:car-door", "device_class": "window", "disabled_by_default": True},
     {"id": "sunroof", "name": "Sunroof", "icon": "mdi:car-select", "device_class": "window", "disabled_by_default": True},
+
 ]
 
 SENSORS = [
@@ -139,6 +141,10 @@ SENSORS = [
     {"id": "charger_power", "name": "Charger Power", "icon": "mdi:flash", "device_class": "power", "unit": "kW"},
     {"id": "charger_voltage", "name": "Charger Voltage", "icon": "mdi:lightning-bolt", "device_class": "voltage", "unit": "V"},
     {"id": "charger_current", "name": "Charger Current", "icon": "mdi:current-ac", "device_class": "current", "unit": "A"},
+    {"id": "evse_max_current", "name": "Charger Max", "icon": "mdi:ev-plug-tesla", "device_class": "current", "unit": "A"},
+    {"id": "charge_current_request", "name": "Requested Current", "icon": "mdi:current-ac", "device_class": "current", "unit": "A", "entity_category": "diagnostic", "disabled_by_default": True},
+    {"id": "vehicle_max_charge_current", "name": "Car Max Acceptable", "icon": "mdi:car-battery", "device_class": "current", "unit": "A"},
+    {"id": "charger_phases", "name": "Charger Phases", "icon": "mdi:sine-wave", "unit": "", "accuracy_decimals": 0},
     {"id": "charging_rate", "name": "Charging Rate", "icon": "mdi:speedometer", "device_class": "speed", "unit": "mph", "accuracy_decimals": 1},
     {"id": "energy_added", "name": "Energy Added", "icon": "mdi:battery-charging", "device_class": "energy", "unit": "kWh", "accuracy_decimals": 1},
     {"id": "time_to_full", "name": "Time to Full", "icon": "mdi:clock-outline", "device_class": "duration", "unit": "min"},
@@ -160,6 +166,8 @@ TEXT_SENSORS = [
     {"id": "charging_state", "name": "Charging", "icon": "mdi:ev-station"},
     {"id": "iec61851_state", "name": "IEC 61851", "icon": "mdi:ev-plug-type2", "disabled_by_default": True},
     {"id": "shift_state", "name": "Shift State", "icon": "mdi:car-shift-pattern", "disabled_by_default": True},
+    {"id": "charge_limit_reason", "name": "Charge Limit Reason", "icon": "mdi:ev-plug-tesla"},
+    {"id": "last_command", "name": "Last Command", "icon": "mdi:history", "entity_category": "diagnostic", "disabled_by_default": True, "setter": "set_last_command_text_sensor"},
 ]
 
 BUTTONS = [
@@ -308,6 +316,9 @@ async def create_sensor(var, definition, device_id=None):
         dc = get_device_class_const(sensor, definition["device_class"])
         if dc:
             config[CONF_DEVICE_CLASS] = dc
+    if "entity_category" in definition:
+        if definition["entity_category"] == "diagnostic":
+            config[CONF_ENTITY_CATEGORY] = ENTITY_CATEGORY_DIAGNOSTIC
     
     sens = await sensor.new_sensor(config)
     # Use generic setter with sensor ID
@@ -326,10 +337,15 @@ async def create_text_sensor(var, definition, device_id=None):
     apply_device_id(config, device_id)
     if "icon" in definition:
         config[CONF_ICON] = definition["icon"]
+    if "entity_category" in definition:
+        if definition["entity_category"] == "diagnostic":
+            config[CONF_ENTITY_CATEGORY] = ENTITY_CATEGORY_DIAGNOSTIC
     
     sens = await text_sensor.new_text_sensor(config)
-    # Use generic setter with sensor ID
-    cg.add(var.set_text_sensor(definition["id"], sens))
+    if definition.get("setter"):
+        cg.add(getattr(var, definition["setter"])(sens))
+    else:
+        cg.add(var.set_text_sensor(definition["id"], sens))
     return sens
 
 
@@ -345,7 +361,7 @@ async def create_button(var, definition, device_id=None):
         config[CONF_ICON] = definition["icon"]
     if "entity_category" in definition:
         if definition["entity_category"] == "diagnostic":
-            config[CONF_ENTITY_CATEGORY] = cg.EntityCategory.ENTITY_CATEGORY_DIAGNOSTIC
+            config[CONF_ENTITY_CATEGORY] = ENTITY_CATEGORY_DIAGNOSTIC
     
     btn = await button.new_button(config)
     cg.add(btn.set_parent(var))

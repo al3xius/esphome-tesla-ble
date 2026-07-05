@@ -132,11 +132,6 @@ public:
     int get_charging_amps_max() const { return charging_amps_max_; }
     void set_charging_amps_max(int max) { charging_amps_max_ = max; }
     
-    // ==========================================================================
-    // ==========================================================================
-    // Command tracking
-    // ==========================================================================
-    void track_command_issued();
     
 private:
     TeslaBLEVehicle* parent_;
@@ -209,6 +204,7 @@ private:
     bool is_charger_connected_from_state(const CarServer_ChargeState_ChargingState& state);
     std::string get_iec61851_state_text(const CarServer_ChargeState_ChargingState& state);
     std::string get_shift_state_text(const CarServer_ShiftState& state);
+    std::string get_charge_limit_reason_text(const CarServer_ChargeState_ChargeLimitReason& reason);
 };
 
 } // namespace tesla_ble_vehicle
