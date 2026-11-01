@@ -473,8 +473,8 @@ async def create_number(var, definition, config, device_id=None):
         max_val = config.get(CONF_CHARGING_AMPS_MAX, DEFAULT_CHARGING_AMPS_MAX)
     num_config = _base_config(definition, definition["class"], "number", device_id)
     num_config[CONF_MODE] = number.NUMBER_MODES['AUTO']
-        max_val = config.get(CONF_CHARGING_AMPS_MAX, 32)
-    
+    max_val = config.get(CONF_CHARGING_AMPS_MAX, 32)
+
     num_config = {
         CONF_ID: cv.declare_id(definition["class"])(f"tesla_{definition['id']}_number"),
         CONF_NAME: definition["name"],
