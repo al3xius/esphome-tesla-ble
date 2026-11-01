@@ -1,9 +1,10 @@
 # Build Commands
 make compile [BOARD=<board>]              # Compile firmware
-make compile_docker [BOARD=<board>]       # Compile using Docker
+make docker-compile [BOARD=<board>]       # Compile using Docker
 make validate-config [BOARD=<board>]      # Validate YAML without building
 make upload [BOARD=<board>] [HOST_SUFFIX] # Flash firmware to device
 make logs [HOST_SUFFIX]                   # View device logs
+make test                                 # Run unit tests (C++ + Python)
 make clean                                # Remove .esphome build dir
 make help                                 # Show all targets
 
@@ -21,7 +22,7 @@ Structure:
 - components/: C++ + Python codegen (tesla_ble_vehicle, tesla_ble_listener)
 - docs/: Screenshots for README
 
-Install methods: ESPHome Dashboard (paste dashboard.yml URL), CLI with uv, or Docker.
+Install methods: ESPHome Device Builder (create a project, then add the board package), CLI with uv, or Docker.
 
 # Code Style
 Python: Imports grouped (esphome, then stdlib). snake_case functions/vars, PascalCase classes.
@@ -38,6 +39,20 @@ Error handling: Check pointers before use. Return bool for success/failure helpe
 # Key Conventions
 - VCSEC is always safe to poll (low-power controller, doesn't wake vehicle)
 - Sleep state is detected via VCSEC; infotainment uses NO_WAKE_SKIP when asleep
+- Polling decision logic (idle/awake/charging/sentry cadence + wake policy) lives in
+  the shared library's include/polling_policy.h; tesla_ble_vehicle.cpp wires it to ESPHome
+- Raw state -> text/flag conversions (sleep/lock/presence/charging/shift/charge-limit) live in
+  the shared library's include/state_text.h and src/state_text.cpp, using generated protobuf enums/tags
 - Sensors defined in __init__.py SENSORS/BINARY_SENSORS/TEXT_SENSORS lists
 - Sensor values published in vehicle_state_manager.cpp update methods
-- Commands use TeslaBLEVehicle::send_command() with Command tracking
+- Commands use TeslaBLEVehicle::track() (tesla-ble OperationResult tracking)
+- The shared Vehicle delays state refreshes 1.5 seconds and coalesces them by state group;
+  disconnect clears deferred refreshes, and pending_command_count includes them.
+
+# Testing
+- make test runs C++ + Python unit tests (fast, no ESPHome/device needed). CI runs it on every PR.
+- C++: tests/test_*.cpp (plain compiler, no framework; shared CHECK harness in tests/test_helper.h).
+  Add behavior-level test cases there.
+- Python: tests/test_codegen.py (stdlib-only ast checks on entity lists in __init__.py);
+  tests/test_command_results.py compiles production TeslaBLEVehicle command-result
+  methods against stubs (outcomes, number rollback, warning expiry).

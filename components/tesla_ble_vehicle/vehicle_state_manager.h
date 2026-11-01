@@ -9,11 +9,16 @@
 #include <esphome/components/lock/lock.h>
 #include <esphome/components/cover/cover.h>
 #include <esphome/components/climate/climate.h>
-#include <optional>
+#include <esphome/components/select/select.h>
 #include <map>
 #include <string>
+#include <cmath>
+#include <type_traits>
 #include <car_server.pb.h>
 #include <vcsec.pb.h>
+#if __has_include(<charging_power.h>)
+#include <charging_power.h>
+#endif
 
 namespace esphome {
 namespace tesla_ble_vehicle {
@@ -48,10 +53,8 @@ public:
     sensor::Sensor* get_sensor(const std::string& id);
     text_sensor::TextSensor* get_text_sensor(const std::string& id);
     
-    // Const versions for state queries
+    // Const version for state queries
     const binary_sensor::BinarySensor* get_binary_sensor(const std::string& id) const;
-    const sensor::Sensor* get_sensor(const std::string& id) const;
-    const text_sensor::TextSensor* get_text_sensor(const std::string& id) const;
     
     // ==========================================================================
     // Control setters (switches and numbers need special handling)
@@ -59,7 +62,12 @@ public:
     void set_charging_switch(switch_::Switch* sw) { charging_switch_ = sw; }
     void set_sentry_mode_switch(switch_::Switch* sw) { sentry_mode_switch_ = sw; }
     void set_steering_wheel_heat_switch(switch_::Switch* sw) { steering_wheel_heat_switch_ = sw; }
-    void set_charging_amps_number(number::Number* number) { charging_amps_number_ = number; }
+    void set_charging_amps_number(number::Number* number) {
+        charging_amps_number_ = number;
+        if (number != nullptr && charging_amps_max_ > 0) {
+            number->traits.set_max_value(static_cast<float>(charging_amps_max_));
+        }
+    }
     void set_charging_limit_number(number::Number* number) { charging_limit_number_ = number; }
     
     // ==========================================================================
@@ -71,16 +79,17 @@ public:
     void set_frunk_cover(cover::Cover* cvr) { frunk_cover_ = cvr; }
     void set_windows_cover(cover::Cover* cvr) { windows_cover_ = cvr; }
     void set_charge_port_door_cover(cover::Cover* cvr) { charge_port_door_cover_ = cvr; }
+    void set_sunroof_cover(cover::Cover* cvr) { sunroof_cover_ = cvr; }
     void set_climate(climate::Climate* clm) { climate_ = clm; }
-    
-    // Lock, Cover, Climate getters (for state manager access)
-    lock::Lock* get_doors_lock() { return doors_lock_; }
-    lock::Lock* get_charge_port_latch_lock() { return charge_port_latch_lock_; }
-    cover::Cover* get_trunk_cover() { return trunk_cover_; }
-    cover::Cover* get_frunk_cover() { return frunk_cover_; }
-    cover::Cover* get_windows_cover() { return windows_cover_; }
-    cover::Cover* get_charge_port_door_cover() { return charge_port_door_cover_; }
-    climate::Climate* get_climate() { return climate_; }
+    void set_seat_select(int seat, select::Select* sel);
+    void set_cabin_protection_select(select::Select* sel) { cabin_protection_select_ = sel; }
+    void set_cabin_temperature_select(select::Select* sel) { cabin_temperature_select_ = sel; }
+
+    // ==========================================================================
+    // Observed seat capabilities
+    // ==========================================================================
+    int seat_cool_level(int seat) const;
+    bool seat_auto_supported(int seat) const;
     
     // ==========================================================================
     // State updates from VCSEC
@@ -94,10 +103,15 @@ public:
     // State updates from CarServer (Infotainment)
     // ==========================================================================
     void update_charge_state(const CarServer_ChargeState& charge_state);
+#if __has_include(<charging_power.h>)
+    void update_charging_power(const TeslaBLE::ChargingPower& power);
+#endif
     void update_climate_state(const CarServer_ClimateState& climate_state);
     void update_drive_state(const CarServer_DriveState& drive_state);
     void update_tire_pressure_state(const CarServer_TirePressureState& tire_pressure_state);
     void update_closures_state(const CarServer_ClosuresState& closures_state);
+    void update_software_update_state(const CarServer_SoftwareUpdateState& update_state,
+                                      const std::string& version);
     
     // ==========================================================================
     // Direct state updates (for specific use cases)
@@ -107,34 +121,41 @@ public:
     void update_user_present(bool present);
     void update_charge_flap_open(bool open);
     void update_charging_amps(float amps);
-    void update_charger_connected(bool connected);
-    
-    // ==========================================================================
-    // Connection state management
-    // ==========================================================================
-    void set_sensors_available(bool available);
-    void reset_all_states();
+    void update_charging_limit(float limit);
+    void update_charging_control_state(bool charging);
+    void update_steering_wheel_heat(bool enabled);
+    void update_sentry_mode(bool enabled);
+    void republish_charging_amps();
+    void republish_charging_limit();
     
     // ==========================================================================
     // State queries
     // ==========================================================================
     bool is_asleep() const;
-    bool is_unlocked() const;
-    bool is_user_present() const;
-    bool is_charge_flap_open() const;
+    bool is_sentry_mode() const;
     bool is_charging() const { return is_charging_; }
-    float get_charging_amps() const;
     
     // ==========================================================================
     // Dynamic limits
     // ==========================================================================
     void update_charging_amps_max(int32_t new_max);
     int get_charging_amps_max() const { return charging_amps_max_; }
-    void set_charging_amps_max(int max) { charging_amps_max_ = max; }
+    void set_charging_amps_max(int max) {
+        if (max <= 0) return;
+        charging_amps_max_ = max;
+        if (charging_amps_number_) {
+            charging_amps_number_->traits.set_max_value(static_cast<float>(max));
+        }
+    }
     
     
 private:
     TeslaBLEVehicle* parent_;
+
+    // Climate sub-updates (called from update_climate_state)
+    void update_seat_climate_state(const CarServer_ClimateState& climate_state);
+    void update_cabin_protection_state(const CarServer_ClimateState& climate_state);
+    void update_steering_wheel_heat_mode(const CarServer_ClimateState& climate_state);
     
     // ==========================================================================
     // Sensor storage maps - sensors are stored by string ID
@@ -161,20 +182,28 @@ private:
     cover::Cover* frunk_cover_{nullptr};
     cover::Cover* windows_cover_{nullptr};
     cover::Cover* charge_port_door_cover_{nullptr};
+    cover::Cover* sunroof_cover_{nullptr};
     climate::Climate* climate_{nullptr};
+    // Seat climate selects indexed by TeslaBLE::SeatPosition value.
+    select::Select* seat_selects_[16]{};
+    select::Select* cabin_protection_select_{nullptr};
+    select::Select* cabin_temperature_select_{nullptr};
     
     // ==========================================================================
     // Internal state tracking
     // ==========================================================================
     bool is_charging_{false};
-    bool is_user_present_{false};
-    int charging_amps_max_{32};
+    int charging_amps_max_{0};
     
     // Climate state tracking
     float current_inside_temp_{NAN};
     float target_temp_{21.0f};
     bool climate_on_{false};
-    
+    // Seat climate indexed by TeslaBLE::SeatPosition value (-1 = not reported).
+    int seat_heat_levels_[16]{};
+    int seat_cool_levels_[16]{};
+    bool seat_auto_modes_[16]{};
+    bool seat_auto_observed_[16]{};
 
     
     // ==========================================================================
@@ -183,28 +212,28 @@ private:
     bool publish_binary_sensor(const std::string& id, bool state);
     bool publish_sensor(const std::string& id, float state);
     bool publish_text_sensor(const std::string& id, const std::string& state);
-    
-    // Overloads for direct pointer access (used internally)
-    bool publish_sensor_state(binary_sensor::BinarySensor* sensor, bool state);
-    bool publish_sensor_state(sensor::Sensor* sensor, float state);
-    bool publish_sensor_state(switch_::Switch* switch_comp, bool state);
-    bool publish_sensor_state(number::Number* number_comp, float state);
-    bool publish_sensor_state(text_sensor::TextSensor* sensor, const std::string& state);
-    
-    void set_sensor_available(binary_sensor::BinarySensor* sensor, bool available);
-    void set_sensor_available(sensor::Sensor* sensor, bool available);
-    
-    // ==========================================================================
-    // State conversion helpers
-    // ==========================================================================
-    std::optional<bool> convert_sleep_status(VCSEC_VehicleSleepStatus_E status);
-    std::optional<bool> convert_lock_status(VCSEC_VehicleLockState_E status);
-    std::optional<bool> convert_user_presence(VCSEC_UserPresence_E presence);
-    std::string get_charging_state_text(const CarServer_ChargeState_ChargingState& state);
-    bool is_charger_connected_from_state(const CarServer_ChargeState_ChargingState& state);
-    std::string get_iec61851_state_text(const CarServer_ChargeState_ChargingState& state);
-    std::string get_shift_state_text(const CarServer_ShiftState& state);
-    std::string get_charge_limit_reason_text(const CarServer_ChargeState_ChargeLimitReason& reason);
+
+    template<typename T, typename V> static bool publish_sensor_state(T *entity, V state) {
+      if (entity == nullptr) return false;
+      if constexpr (std::is_floating_point<V>::value) {
+        if (!entity->has_state() || std::isnan(entity->state) != std::isnan(state) ||
+            std::abs(entity->state - state) > 0.001f) {
+          entity->publish_state(state);
+          return true;
+        }
+      } else {
+        if (!entity->has_state() || entity->state != state) {
+          entity->publish_state(state);
+          return true;
+        }
+      }
+      return false;
+    }
+
+    template<typename T> static void set_sensor_available(T *entity, bool available) {
+      if (entity != nullptr) entity->set_has_state(available);
+    }
+
 };
 
 } // namespace tesla_ble_vehicle

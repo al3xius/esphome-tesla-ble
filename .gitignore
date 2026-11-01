@@ -1,6 +1,7 @@
 __pycache__
 .esphome
 secrets.yaml
+!tests/secrets.yaml
 .vscode
 .DS_Store
 .venv
@@ -8,3 +9,5 @@ firmware.bin.gz
 foo
 *.log
 .selected_suffix
+tests/build/
+compile_flags.txt

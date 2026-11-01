@@ -1,14 +1,23 @@
 #include "vehicle_state_manager.h"
+#include <state_text.h>
 #include "tesla_ble_vehicle.h"
+#ifdef USE_API
+#include <esphome/components/api/api_server.h>
+#endif
 #include <esphome/core/helpers.h>
 #include <cmath>
 #include <algorithm>
+#include <cinttypes>
 
 namespace esphome {
 namespace tesla_ble_vehicle {
 
 VehicleStateManager::VehicleStateManager(TeslaBLEVehicle* parent)
-    : parent_(parent) {}
+    : parent_(parent) {
+    // -1 means "not reported yet" for seat levels.
+    std::fill(std::begin(seat_heat_levels_), std::end(seat_heat_levels_), -1);
+    std::fill(std::begin(seat_cool_levels_), std::end(seat_cool_levels_), -1);
+}
 
 // =============================================================================
 // Generic sensor setters/getters
@@ -59,16 +68,6 @@ const binary_sensor::BinarySensor* VehicleStateManager::get_binary_sensor(const 
     return (it != binary_sensors_.end()) ? it->second : nullptr;
 }
 
-const sensor::Sensor* VehicleStateManager::get_sensor(const std::string& id) const {
-    auto it = sensors_.find(id);
-    return (it != sensors_.end()) ? it->second : nullptr;
-}
-
-const text_sensor::TextSensor* VehicleStateManager::get_text_sensor(const std::string& id) const {
-    auto it = text_sensors_.find(id);
-    return (it != text_sensors_.end()) ? it->second : nullptr;
-}
-
 // =============================================================================
 // Helper methods for publishing by ID
 // =============================================================================
@@ -107,7 +106,7 @@ void VehicleStateManager::update_vehicle_status(const VCSEC_VehicleStatus& statu
 }
 
 void VehicleStateManager::update_sleep_status(VCSEC_VehicleSleepStatus_E status) {
-    auto asleep = convert_sleep_status(status);
+    auto asleep = TeslaBLE::state_text::sleep_status(static_cast<int>(status));
     if (asleep.has_value()) {
         update_asleep(asleep.value());
     } else {
@@ -116,14 +115,14 @@ void VehicleStateManager::update_sleep_status(VCSEC_VehicleSleepStatus_E status)
 }
 
 void VehicleStateManager::update_lock_status(VCSEC_VehicleLockState_E status) {
-    auto unlocked = convert_lock_status(status);
+    auto unlocked = TeslaBLE::state_text::lock_status(static_cast<int>(status));
     if (unlocked.has_value()) {
         update_unlocked(unlocked.value());
     }
 }
 
 void VehicleStateManager::update_user_presence(VCSEC_UserPresence_E presence) {
-    auto present = convert_user_presence(presence);
+    auto present = TeslaBLE::state_text::user_presence(static_cast<int>(presence));
     if (present.has_value()) {
         update_user_present(present.value());
     } else {
@@ -141,10 +140,7 @@ void VehicleStateManager::update_charge_state(const CarServer_ChargeState& charg
     // Update charging status and charging state text
     if (charge_state.has_charging_state) {
         const bool was_charging = is_charging_;
-        const bool new_charging_state = (
-            charge_state.charging_state.which_type == CarServer_ChargeState_ChargingState_Charging_tag ||
-            charge_state.charging_state.which_type == CarServer_ChargeState_ChargingState_Starting_tag
-        );
+        const bool new_charging_state = TeslaBLE::state_text::is_charging(charge_state.charging_state.which_type);
         
         ESP_LOGD(STATE_MANAGER_TAG, "Charging state check: was=%s, new=%s, state_type=%d", 
                  was_charging ? "ON" : "OFF", 
@@ -164,11 +160,11 @@ void VehicleStateManager::update_charge_state(const CarServer_ChargeState& charg
         }
         
         // Update text sensors
-        publish_text_sensor("charging_state", get_charging_state_text(charge_state.charging_state));
-        publish_text_sensor("iec61851_state", get_iec61851_state_text(charge_state.charging_state));
+        publish_text_sensor("charging_state", TeslaBLE::state_text::charging_state(charge_state.charging_state.which_type));
+        publish_text_sensor("iec61851_state", TeslaBLE::state_text::iec61851_state(charge_state.charging_state.which_type));
         
         // Update charger connected binary sensor
-        const bool charger_connected = is_charger_connected_from_state(charge_state.charging_state);
+        const bool charger_connected = TeslaBLE::state_text::charger_connected(charge_state.charging_state.which_type);
         publish_binary_sensor("charger", charger_connected);
     }
     
@@ -189,6 +185,17 @@ void VehicleStateManager::update_charge_state(const CarServer_ChargeState& charg
             publish_sensor("charger_power", power_kw);
         }
     }
+#if !__has_include(<charging_power.h>)
+    // Without phase detection, use reported power rather than raw phase counts.
+    const bool disconnected = charge_state.has_charging_state &&
+        charge_state.charging_state.which_type == CarServer_ChargeState_ChargingState_Disconnected_tag;
+    const bool dc = charge_state.which_optional_fast_charger_present &&
+        charge_state.optional_fast_charger_present.fast_charger_present;
+    const auto reported = charge_state.optional_charger_power.charger_power;
+    publish_sensor("charger_power_estimated", disconnected ? 0.0f :
+        (!dc && charge_state.which_optional_charger_power && reported >= 0 && reported <= 500 ?
+         static_cast<float>(reported) : NAN));
+#endif
     
     // Update range (battery_range is in miles)
     if (charge_state.which_optional_battery_range) {
@@ -222,7 +229,7 @@ void VehicleStateManager::update_charge_state(const CarServer_ChargeState& charg
         }
     }
     
-    // Update charger current (real-time feedback, never delay)
+    // Update charger current
     if (charge_state.which_optional_charger_actual_current) {
         const float current = static_cast<float>(charge_state.optional_charger_actual_current.charger_actual_current);
         if (current >= 0.0f && current <= 100.0f && std::isfinite(current)) {
@@ -244,7 +251,7 @@ void VehicleStateManager::update_charge_state(const CarServer_ChargeState& charg
         if (max_amps > 0 && max_amps <= 100) {
             publish_sensor("vehicle_max_charge_current", static_cast<float>(max_amps));
             if (max_amps != charging_amps_max_) {
-                ESP_LOGI(STATE_MANAGER_TAG, "Received new max charging amps: %d A", max_amps);
+                ESP_LOGI(STATE_MANAGER_TAG, "Received new max charging amps: %" PRId32 " A", max_amps);
                 update_charging_amps_max(max_amps);
             }
         }
@@ -258,7 +265,7 @@ void VehicleStateManager::update_charge_state(const CarServer_ChargeState& charg
         }
     }
 
-    ESP_LOGD(STATE_MANAGER_TAG, "charge_limit_reason which=%d actual=%ld request=%ld pilot=%ld",
+    ESP_LOGD(STATE_MANAGER_TAG, "charge_limit_reason which=%d actual=%" PRId32 " request=%" PRId32 " pilot=%" PRId32,
              charge_state.which_optional_charge_limit_reason,
              charge_state.optional_charger_actual_current.charger_actual_current,
              charge_state.optional_charge_current_request.charge_current_request,
@@ -276,7 +283,7 @@ void VehicleStateManager::update_charge_state(const CarServer_ChargeState& charg
     // Some BLE responses omit charge_limit_reason even when charging is externally limited.
     if (charge_state.which_optional_charge_limit_reason) {
         const auto reason = charge_state.optional_charge_limit_reason.charge_limit_reason;
-        publish_text_sensor("charge_limit_reason", get_charge_limit_reason_text(reason));
+        publish_text_sensor("charge_limit_reason", TeslaBLE::state_text::charge_limit_reason(static_cast<int>(reason)));
     } else if (appears_externally_limited) {
         publish_text_sensor("charge_limit_reason", "ExternalLimit");
     } else {
@@ -298,7 +305,7 @@ void VehicleStateManager::update_charge_state(const CarServer_ChargeState& charg
     // Update charge limit
     if (charge_state.which_optional_charge_limit_soc && charging_limit_number_) {
         const float limit = static_cast<float>(charge_state.optional_charge_limit_soc.charge_limit_soc);
-        publish_sensor_state(charging_limit_number_, limit);
+        update_charging_limit(limit);
     }
     
     // Update charge port door cover (physical door open/closed)
@@ -310,12 +317,10 @@ void VehicleStateManager::update_charge_state(const CarServer_ChargeState& charg
         }
     }
     
-    // Update charger phases (1-phase vs 3-phase)
+    // Keep raw phases for diagnostics.
     if (charge_state.which_optional_charger_phases) {
         const float phases = static_cast<float>(charge_state.optional_charger_phases.charger_phases);
-        if (phases >= 1.0f && phases <= 3.0f && std::isfinite(phases)) {
-            publish_sensor("charger_phases", phases);
-        }
+        publish_sensor("charger_phases", phases);
     }
 
     // Update charge port latch lock (cable latch engaged/disengaged)
@@ -331,11 +336,11 @@ void VehicleStateManager::update_charge_state(const CarServer_ChargeState& charg
             }
         }
     }
+
 }
 
 void VehicleStateManager::update_climate_state(const CarServer_ClimateState& climate_state) {
     ESP_LOGD(STATE_MANAGER_TAG, "Updating climate state");
-    
     // Inside temperature (used internally for climate entity)
     if (climate_state.which_optional_inside_temp_celsius) {
         const float temp = climate_state.optional_inside_temp_celsius.inside_temp_celsius;
@@ -378,6 +383,137 @@ void VehicleStateManager::update_climate_state(const CarServer_ClimateState& cli
     if (auto* tesla_climate = static_cast<TeslaClimate*>(climate_)) {
         tesla_climate->update_state(climate_on_, current_inside_temp_, target_temp_);
     }
+
+    update_seat_climate_state(climate_state);
+    update_cabin_protection_state(climate_state);
+    update_steering_wheel_heat_mode(climate_state);
+}
+
+void VehicleStateManager::set_seat_select(int seat, select::Select* sel) {
+    if (seat < 0 || seat >= 16) {
+        ESP_LOGW(STATE_MANAGER_TAG, "Ignoring seat select for invalid seat %d", seat);
+        return;
+    }
+    seat_selects_[seat] = sel;
+}
+
+int VehicleStateManager::seat_cool_level(int seat) const {
+    return seat >= 0 && seat < 16 ? seat_cool_levels_[seat] : -1;
+}
+
+bool VehicleStateManager::seat_auto_supported(int seat) const {
+    return seat >= 0 && seat < 16 && seat_auto_observed_[seat];
+}
+
+// Seats report each field only when fitted, so the reported value is also the
+// capability signal; the level arrays start at -1 (not reported).
+void VehicleStateManager::update_seat_climate_state(const CarServer_ClimateState& climate_state) {
+    struct SeatField {
+        pb_size_t which_heater;
+        const int32_t* heater;
+        pb_size_t which_cooler;
+        const int32_t* cooler;
+        pb_size_t which_auto;
+        const bool* auto_mode;
+        int seat;
+    };
+    const SeatField fields[] = {
+        {climate_state.which_optional_seat_heater_left, &climate_state.optional_seat_heater_left.seat_heater_left,
+         climate_state.which_optional_seat_fan_front_left, &climate_state.optional_seat_fan_front_left.seat_fan_front_left,
+         climate_state.which_optional_auto_seat_climate_left, &climate_state.optional_auto_seat_climate_left.auto_seat_climate_left,
+         static_cast<int>(TeslaBLE::SeatPosition::FRONT_LEFT)},
+        {climate_state.which_optional_seat_heater_right, &climate_state.optional_seat_heater_right.seat_heater_right,
+         climate_state.which_optional_seat_fan_front_right, &climate_state.optional_seat_fan_front_right.seat_fan_front_right,
+         climate_state.which_optional_auto_seat_climate_right, &climate_state.optional_auto_seat_climate_right.auto_seat_climate_right,
+         static_cast<int>(TeslaBLE::SeatPosition::FRONT_RIGHT)},
+        {climate_state.which_optional_seat_heater_rear_left, &climate_state.optional_seat_heater_rear_left.seat_heater_rear_left,
+         0, nullptr, 0, nullptr, static_cast<int>(TeslaBLE::SeatPosition::REAR_LEFT)},
+        {climate_state.which_optional_seat_heater_rear_right, &climate_state.optional_seat_heater_rear_right.seat_heater_rear_right,
+         0, nullptr, 0, nullptr, static_cast<int>(TeslaBLE::SeatPosition::REAR_RIGHT)},
+        {climate_state.which_optional_seat_heater_rear_center, &climate_state.optional_seat_heater_rear_center.seat_heater_rear_center,
+         0, nullptr, 0, nullptr, static_cast<int>(TeslaBLE::SeatPosition::REAR_CENTER)},
+        {climate_state.which_optional_seat_heater_rear_left_back, &climate_state.optional_seat_heater_rear_left_back.seat_heater_rear_left_back,
+         0, nullptr, 0, nullptr, static_cast<int>(TeslaBLE::SeatPosition::REAR_LEFT_BACK)},
+        {climate_state.which_optional_seat_heater_rear_right_back, &climate_state.optional_seat_heater_rear_right_back.seat_heater_rear_right_back,
+         0, nullptr, 0, nullptr, static_cast<int>(TeslaBLE::SeatPosition::REAR_RIGHT_BACK)},
+        {climate_state.which_optional_seat_heater_third_row_left, &climate_state.optional_seat_heater_third_row_left.seat_heater_third_row_left,
+         0, nullptr, 0, nullptr, static_cast<int>(TeslaBLE::SeatPosition::THIRD_ROW_LEFT)},
+        {climate_state.which_optional_seat_heater_third_row_right, &climate_state.optional_seat_heater_third_row_right.seat_heater_third_row_right,
+         0, nullptr, 0, nullptr, static_cast<int>(TeslaBLE::SeatPosition::THIRD_ROW_RIGHT)},
+    };
+
+    for (const auto& field : fields) {
+        auto* seat_select = seat_selects_[field.seat];
+        if (seat_select == nullptr) {
+            continue;
+        }
+        auto* tesla_select = static_cast<TeslaSeatClimateSelect*>(seat_select);
+        const bool cooling_supported = tesla_select->cooling_supported();
+        const bool auto_supported = tesla_select->auto_supported();
+        if (field.which_heater) {
+            seat_heat_levels_[field.seat] = *field.heater;
+        }
+        if (field.which_cooler) {
+            seat_cool_levels_[field.seat] = *field.cooler;
+        }
+        if (field.which_auto) {
+            seat_auto_observed_[field.seat] = true;
+            seat_auto_modes_[field.seat] = *field.auto_mode;
+        }
+        const int index = seat_climate_option_index(seat_heat_levels_[field.seat], seat_cool_levels_[field.seat],
+                                                    seat_auto_modes_[field.seat], cooling_supported, auto_supported);
+        if (index >= 0 && seat_select->active_index() != static_cast<size_t>(index) &&
+            seat_select->has_index(static_cast<size_t>(index))) {
+            seat_select->publish_state(static_cast<size_t>(index));
+        }
+    }
+}
+
+void VehicleStateManager::update_cabin_protection_state(const CarServer_ClimateState& climate_state) {
+    if (climate_state.which_optional_cabin_overheat_protection) {
+        const int mode = climate_state.optional_cabin_overheat_protection.cabin_overheat_protection;
+        if (cabin_protection_select_ != nullptr && mode >= 0 && mode <= 2 &&
+            cabin_protection_select_->active_index() != static_cast<size_t>(mode) &&
+            cabin_protection_select_->has_index(static_cast<size_t>(mode))) {
+            cabin_protection_select_->publish_state(static_cast<size_t>(mode));
+        }
+    }
+    if (climate_state.which_optional_cop_activation_temperature) {
+        const int index = climate_state.optional_cop_activation_temperature.cop_activation_temperature - 1;
+        if (cabin_temperature_select_ != nullptr && index >= 0 && index <= 2 &&
+            cabin_temperature_select_->active_index() != static_cast<size_t>(index) &&
+            cabin_temperature_select_->has_index(static_cast<size_t>(index))) {
+            cabin_temperature_select_->publish_state(static_cast<size_t>(index));
+        }
+    }
+}
+
+// The vehicle reports Auto/Low/High separately from the on/off heater flag.
+void VehicleStateManager::update_steering_wheel_heat_mode(const CarServer_ClimateState& climate_state) {
+    if (climate_state.which_optional_auto_steering_wheel_heat &&
+        climate_state.optional_auto_steering_wheel_heat.auto_steering_wheel_heat) {
+        publish_text_sensor("steering_wheel_heat_mode", "Auto");
+        return;
+    }
+    if (climate_state.which_optional_steering_wheel_heat_level) {
+        switch (climate_state.optional_steering_wheel_heat_level.steering_wheel_heat_level) {
+            case CarServer_StwHeatLevel_StwHeatLevel_Off:
+                publish_text_sensor("steering_wheel_heat_mode", "Off");
+                return;
+            case CarServer_StwHeatLevel_StwHeatLevel_Low:
+                publish_text_sensor("steering_wheel_heat_mode", "Low");
+                return;
+            case CarServer_StwHeatLevel_StwHeatLevel_High:
+                publish_text_sensor("steering_wheel_heat_mode", "High");
+                return;
+            default:
+                break;
+        }
+    }
+    if (climate_state.which_optional_steering_wheel_heater) {
+        publish_text_sensor("steering_wheel_heat_mode",
+                            climate_state.optional_steering_wheel_heater.steering_wheel_heater ? "On" : "Off");
+    }
 }
 
 void VehicleStateManager::update_drive_state(const CarServer_DriveState& drive_state) {
@@ -385,10 +521,10 @@ void VehicleStateManager::update_drive_state(const CarServer_DriveState& drive_s
     
     // Shift state
     if (drive_state.has_shift_state) {
-        publish_text_sensor("shift_state", get_shift_state_text(drive_state.shift_state));
+        publish_text_sensor("shift_state", TeslaBLE::state_text::shift_state(drive_state.shift_state.which_type));
         
         // Parking brake sensor - true when in P
-        const bool parked = (drive_state.shift_state.which_type == CarServer_ShiftState_P_tag);
+        const bool parked = TeslaBLE::state_text::is_parked(drive_state.shift_state.which_type);
         publish_binary_sensor("parking_brake", parked);
     }
     
@@ -492,17 +628,20 @@ void VehicleStateManager::update_closures_state(const CarServer_ClosuresState& c
         windows_cover_->publish_state();
     }
     
-    // Sunroof (any percent open > 0 means open)
-    if (closures_state.which_optional_sun_roof_percent_open) {
-        const bool sunroof_open = closures_state.optional_sun_roof_percent_open.sun_roof_percent_open > 0;
-        publish_binary_sensor("sunroof", sunroof_open);
+    // Sunroof (percent open; the cover publishes absolute position)
+    if (closures_state.which_optional_sun_roof_percent_open && sunroof_cover_ != nullptr) {
+        const int percent = closures_state.optional_sun_roof_percent_open.sun_roof_percent_open;
+        const float position = static_cast<float>(percent < 0 ? 0 : percent > 100 ? 100 : percent) / 100.0f;
+        if (sunroof_cover_->position != position) {
+            sunroof_cover_->position = position;
+            sunroof_cover_->publish_state();
+        }
     }
     
     // Sentry mode - sync switch state from vehicle
     if (closures_state.has_sentry_mode_state && sentry_mode_switch_ != nullptr) {
-        const bool sentry_active = (closures_state.sentry_mode_state.which_type == CarServer_ClosuresState_SentryModeState_Armed_tag ||
-                              closures_state.sentry_mode_state.which_type == CarServer_ClosuresState_SentryModeState_Aware_tag ||
-                              closures_state.sentry_mode_state.which_type == CarServer_ClosuresState_SentryModeState_Panic_tag);
+        const bool sentry_active =
+            TeslaBLE::state_text::sentry_mode_active(closures_state.sentry_mode_state.which_type);
         if (!sentry_mode_switch_->has_state() || sentry_mode_switch_->state != sentry_active) {
             ESP_LOGD(STATE_MANAGER_TAG, "Syncing sentry mode switch to vehicle state: %s", sentry_active ? "ON" : "OFF");
             publish_sensor_state(sentry_mode_switch_, sentry_active);
@@ -519,8 +658,17 @@ void VehicleStateManager::update_closures_state(const CarServer_ClosuresState& c
 // Direct state update methods
 // =============================================================================
 
-void VehicleStateManager::update_asleep(bool asleep) {
-    if (publish_binary_sensor("asleep", asleep)) {
+void VehicleStateManager::update_software_update_state(const CarServer_SoftwareUpdateState& update_state,
+                                                       const std::string& version) {
+    ESP_LOGD(STATE_MANAGER_TAG, "Updating software update state");
+    if (update_state.has_status) {
+        publish_text_sensor("software_update",
+                            TeslaBLE::state_text::software_update_status(update_state.status.which_type));
+    }
+    publish_text_sensor("software_update_version", version);
+}
+
+void VehicleStateManager::update_asleep(bool asleep) {    if (publish_binary_sensor("asleep", asleep)) {
         ESP_LOGI(STATE_MANAGER_TAG, "Vehicle sleep state: %s", asleep ? "ASLEEP" : "AWAKE");
     }
 }
@@ -540,7 +688,6 @@ void VehicleStateManager::update_user_present(bool present) {
     if (publish_binary_sensor("user_present", present)) {
         ESP_LOGI(STATE_MANAGER_TAG, "User presence: %s", present ? "PRESENT" : "NOT_PRESENT");
     }
-    is_user_present_ = present;
 }
 
 void VehicleStateManager::update_charge_flap_open(bool open) {
@@ -557,60 +704,56 @@ void VehicleStateManager::update_charging_amps(float amps) {
     publish_sensor_state(charging_amps_number_, amps);
 }
 
-void VehicleStateManager::update_charger_connected(bool connected) {
-    publish_binary_sensor("charger", connected);
+void VehicleStateManager::update_charging_limit(float limit) {
+    publish_sensor_state(charging_limit_number_, limit);
 }
 
-// =============================================================================
-// Connection state management
-// =============================================================================
-
-void VehicleStateManager::set_sensors_available(bool available) {
-    ESP_LOGD(STATE_MANAGER_TAG, "Setting sensors available: %s", available ? "true" : "false");
-    
-    // Set availability for key binary sensors
-    set_sensor_available(get_binary_sensor("asleep"), available);
-    set_sensor_available(get_binary_sensor("user_present"), available);
+void VehicleStateManager::update_charging_control_state(bool charging) {
+    publish_sensor_state(charging_switch_, charging);
 }
 
-void VehicleStateManager::reset_all_states() {
-    ESP_LOGD(STATE_MANAGER_TAG, "Resetting all vehicle states");
-    is_charging_ = false;
-    set_sensors_available(false);
+void VehicleStateManager::update_steering_wheel_heat(bool enabled) {
+    publish_sensor_state(steering_wheel_heat_switch_, enabled);
 }
+
+void VehicleStateManager::update_sentry_mode(bool enabled) {
+    publish_sensor_state(sentry_mode_switch_, enabled);
+}
+
+void VehicleStateManager::republish_charging_amps() {
+    if (charging_amps_number_ != nullptr && charging_amps_number_->has_state()) {
+        charging_amps_number_->publish_state(charging_amps_number_->state);
+    }
+}
+
+void VehicleStateManager::republish_charging_limit() {
+    if (charging_limit_number_ != nullptr && charging_limit_number_->has_state()) {
+        charging_limit_number_->publish_state(charging_limit_number_->state);
+    }
+}
+
+#if __has_include(<charging_power.h>)
+void VehicleStateManager::update_charging_power(const TeslaBLE::ChargingPower& power) {
+    publish_sensor("charger_power_estimated", power.is_ac == false ? NAN :
+        static_cast<float>(power.power_w.value_or(NAN) / 1000.0));
+    publish_sensor("charger_effective_phases", power.effective_phases ?
+        static_cast<float>(*power.effective_phases) : NAN);
+}
+#endif
 
 // =============================================================================
 // State queries
 // =============================================================================
 
 bool VehicleStateManager::is_asleep() const {
+    // Unknown (no state yet) counts as asleep: before the first VCSEC reply a
+    // wake request must send the wake action, not a poll that cannot wake.
     auto* sensor = get_binary_sensor("asleep");
-    return sensor ? sensor->state : true;
+    return sensor == nullptr || !sensor->has_state() || sensor->state;
 }
 
-bool VehicleStateManager::is_unlocked() const {
-    // Use doors lock entity state if available, otherwise check binary sensor
-    if (doors_lock_) {
-        return doors_lock_->state == lock::LOCK_STATE_UNLOCKED;
-    }
-    return false;
-}
-
-bool VehicleStateManager::is_user_present() const {
-    auto* sensor = get_binary_sensor("user_present");
-    return sensor ? sensor->state : false;
-}
-
-bool VehicleStateManager::is_charge_flap_open() const {
-    // Use charge port door cover entity if available
-    if (charge_port_door_cover_) {
-        return charge_port_door_cover_->position == cover::COVER_OPEN;
-    }
-    return false;
-}
-
-float VehicleStateManager::get_charging_amps() const {
-    return charging_amps_number_ ? charging_amps_number_->state : 0.0f;
+bool VehicleStateManager::is_sentry_mode() const {
+    return sentry_mode_switch_ != nullptr && sentry_mode_switch_->state;
 }
 
 // =============================================================================
@@ -619,7 +762,7 @@ float VehicleStateManager::get_charging_amps() const {
 
 void VehicleStateManager::update_charging_amps_max(int32_t new_max) {
     if (new_max <= 0) {
-        ESP_LOGW(STATE_MANAGER_TAG, "Invalid max charging amps: %d A", new_max);
+        ESP_LOGW(STATE_MANAGER_TAG, "Invalid max charging amps: %" PRId32 " A", new_max);
         return;
     }
 
@@ -629,165 +772,28 @@ void VehicleStateManager::update_charging_amps_max(int32_t new_max) {
 
     charging_amps_max_ = new_max;
 
-    if (charging_amps_number_) {
-        ESP_LOGD(STATE_MANAGER_TAG, "Updated max charging amps to %d A", new_max);
+    if (parent_) {
+        parent_->save_charging_amps_max_(new_max);
     }
+
+    if (charging_amps_number_) {
+        charging_amps_number_->traits.set_max_value(static_cast<float>(new_max));
+#ifdef USE_API
+        if (api::global_api_server != nullptr) {
+            // ESPHome sends number traits only during API entity discovery.
+            ESP_LOGI(STATE_MANAGER_TAG, "Reconnecting API clients to refresh charging amps limit");
+            for (const auto &client : api::global_api_server->active_clients()) {
+                client->on_fatal_error();
+            }
+        }
+#endif
+    }
+    ESP_LOGI(STATE_MANAGER_TAG, "Updated max charging amps to %" PRId32 " A", new_max);
 }
 
 // =============================================================================
 // Private helper methods
 // =============================================================================
-
-bool VehicleStateManager::publish_sensor_state(binary_sensor::BinarySensor* sensor, bool state) {
-    if (sensor != nullptr && (!sensor->has_state() || sensor->state != state)) {
-        sensor->publish_state(state);
-        return true;
-    }
-    return false;
-}
-
-bool VehicleStateManager::publish_sensor_state(sensor::Sensor* sensor, float state) {
-    if (sensor != nullptr && (!sensor->has_state() || std::abs(sensor->state - state) > 0.001f)) {
-        sensor->publish_state(state);
-        return true;
-    }
-    return false;
-}
-
-bool VehicleStateManager::publish_sensor_state(switch_::Switch* switch_comp, bool state) {
-    if (switch_comp != nullptr && (!switch_comp->has_state() || switch_comp->state != state)) {
-        switch_comp->publish_state(state);
-        return true;
-    }
-    return false;
-}
-
-bool VehicleStateManager::publish_sensor_state(number::Number* number_comp, float state) {
-    if (number_comp != nullptr && (!number_comp->has_state() || std::abs(number_comp->state - state) > 0.001f)) {
-        number_comp->publish_state(state);
-        return true;
-    }
-    return false;
-}
-
-bool VehicleStateManager::publish_sensor_state(text_sensor::TextSensor* sensor, const std::string& state) {
-    if (sensor != nullptr && (!sensor->has_state() || sensor->state != state)) {
-        sensor->publish_state(state);
-        return true;
-    }
-    return false;
-}
-
-void VehicleStateManager::set_sensor_available(binary_sensor::BinarySensor* sensor, bool available) {
-    if (sensor != nullptr) {
-        sensor->set_has_state(available);
-    }
-}
-
-void VehicleStateManager::set_sensor_available(sensor::Sensor* sensor, bool available) {
-    if (sensor != nullptr) {
-        sensor->set_has_state(available);
-    }
-}
-
-// =============================================================================
-// State conversion helpers
-// =============================================================================
-
-std::optional<bool> VehicleStateManager::convert_sleep_status(VCSEC_VehicleSleepStatus_E status) {
-    switch (status) {
-        case VCSEC_VehicleSleepStatus_E_VEHICLE_SLEEP_STATUS_AWAKE:
-            return false;
-        case VCSEC_VehicleSleepStatus_E_VEHICLE_SLEEP_STATUS_ASLEEP:
-            return true;
-        default:
-            return std::nullopt;
-    }
-}
-
-std::optional<bool> VehicleStateManager::convert_lock_status(VCSEC_VehicleLockState_E status) {
-    switch (status) {
-        case VCSEC_VehicleLockState_E_VEHICLELOCKSTATE_UNLOCKED:
-        case VCSEC_VehicleLockState_E_VEHICLELOCKSTATE_SELECTIVE_UNLOCKED:
-            return true;
-        case VCSEC_VehicleLockState_E_VEHICLELOCKSTATE_LOCKED:
-        case VCSEC_VehicleLockState_E_VEHICLELOCKSTATE_INTERNAL_LOCKED:
-            return false;
-        default:
-            return std::nullopt;
-    }
-}
-
-std::optional<bool> VehicleStateManager::convert_user_presence(VCSEC_UserPresence_E presence) {
-    switch (presence) {
-        case VCSEC_UserPresence_E_VEHICLE_USER_PRESENCE_PRESENT:
-            return true;
-        case VCSEC_UserPresence_E_VEHICLE_USER_PRESENCE_NOT_PRESENT:
-            return false;
-        default:
-            return std::nullopt;
-    }
-}
-
-std::string VehicleStateManager::get_charging_state_text(const CarServer_ChargeState_ChargingState& state) {
-    switch (state.which_type) {
-        case CarServer_ChargeState_ChargingState_Disconnected_tag: return "Disconnected";
-        case CarServer_ChargeState_ChargingState_NoPower_tag: return "No Power";
-        case CarServer_ChargeState_ChargingState_Starting_tag: return "Starting";
-        case CarServer_ChargeState_ChargingState_Charging_tag: return "Charging";
-        case CarServer_ChargeState_ChargingState_Complete_tag: return "Complete";
-        case CarServer_ChargeState_ChargingState_Stopped_tag: return "Stopped";
-        case CarServer_ChargeState_ChargingState_Calibrating_tag: return "Calibrating";
-        default: return "Unknown";
-    }
-}
-
-bool VehicleStateManager::is_charger_connected_from_state(const CarServer_ChargeState_ChargingState& state) {
-    switch (state.which_type) {
-        case CarServer_ChargeState_ChargingState_Disconnected_tag:
-        case CarServer_ChargeState_ChargingState_Unknown_tag:
-            return false;
-        default:
-            return true;
-    }
-}
-
-std::string VehicleStateManager::get_iec61851_state_text(const CarServer_ChargeState_ChargingState& state) {
-    switch (state.which_type) {
-        case CarServer_ChargeState_ChargingState_Disconnected_tag: return "A";
-        case CarServer_ChargeState_ChargingState_NoPower_tag: return "E";
-        case CarServer_ChargeState_ChargingState_Starting_tag: return "C";
-        case CarServer_ChargeState_ChargingState_Charging_tag: return "C";
-        case CarServer_ChargeState_ChargingState_Complete_tag: return "B";
-        case CarServer_ChargeState_ChargingState_Stopped_tag: return "B";
-        case CarServer_ChargeState_ChargingState_Calibrating_tag: return "C";
-        default: return "F";
-    }
-}
-
-std::string VehicleStateManager::get_shift_state_text(const CarServer_ShiftState& state) {
-    switch (state.which_type) {
-        case CarServer_ShiftState_P_tag: return "P";
-        case CarServer_ShiftState_R_tag: return "R";
-        case CarServer_ShiftState_N_tag: return "N";
-        case CarServer_ShiftState_D_tag: return "D";
-        case CarServer_ShiftState_SNA_tag: return "SNA";
-        case CarServer_ShiftState_Invalid_tag: return "Invalid";
-        default: return "Unknown";
-    }
-}
-
-std::string VehicleStateManager::get_charge_limit_reason_text(const CarServer_ChargeState_ChargeLimitReason& reason) {
-    switch (reason) {
-        case CarServer_ChargeState_ChargeLimitReason_ChargeLimitReasonUnknown: return "Unknown";
-        case CarServer_ChargeState_ChargeLimitReason_ChargeLimitReasonNone: return "None";
-        case CarServer_ChargeState_ChargeLimitReason_ChargeLimitReasonEvse: return "EVSE";
-        case CarServer_ChargeState_ChargeLimitReason_ChargeLimitReasonBattTempLow: return "BattTempLow";
-        case CarServer_ChargeState_ChargeLimitReason_ChargeLimitReasonHighSoc: return "HighSoc";
-        case CarServer_ChargeState_ChargeLimitReason_ChargeLimitReasonCabin: return "Cabin";
-        default: return "Unknown";
-    }
-}
 
 } // namespace tesla_ble_vehicle
 } // namespace esphome

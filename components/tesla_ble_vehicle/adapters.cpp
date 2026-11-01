@@ -26,6 +26,17 @@ void BleAdapterImpl::disconnect() {
 
 bool BleAdapterImpl::write(const std::vector<uint8_t>& data) {
     if (!parent_->is_connected()) return false;
+
+    // Whole-frame admission: reject the frame rather than start one that does
+    // not fit, so the queue never holds a partial frame and memory stays
+    // bounded on a sick link. A rejected write surfaces to the library as a
+    // failed attempt (ambiguous if an earlier copy was accepted).
+    const size_t chunks = (data.size() + BLOCK_LENGTH - 1) / BLOCK_LENGTH;
+    if (write_queue_.size() + chunks > MAX_TX_BACKLOG_CHUNKS) {
+        ESP_LOGW(ADAPTER_TAG, "TX backlog full (%u queued + %u new chunks) - rejecting frame",
+                 (unsigned) write_queue_.size(), (unsigned) chunks);
+        return false;
+    }
     
     ESP_LOGV(ADAPTER_TAG, "BLE TX: %s", TeslaBLE::format_hex(data.data(), data.size()).c_str());
     
@@ -43,39 +54,54 @@ bool BleAdapterImpl::write(const std::vector<uint8_t>& data) {
 void BleAdapterImpl::process_write_queue() {
     if (write_queue_.empty()) return;
     if (!parent_->is_connected()) return;
-    
-    // Rate limit? Or just send one per loop?
-    // BLEManager sent one per loop (implied by just popping front)
-    
+
+    // Back off a failing chunk instead of retrying every loop() iteration,
+    // and drop it after repeated failures so it cannot block newer traffic.
+    switch (write_retry_policy_.next_action(millis())) {
+        case WriteAttemptDecision::WAIT:
+            return;
+        case WriteAttemptDecision::DROP:
+            ESP_LOGE(ADAPTER_TAG, "Dropping TX chunk after %u consecutive failures (%u bytes)",
+                     (unsigned) WriteRetryPolicy::MAX_CONSECUTIVE_FAILURES,
+                     (unsigned) write_queue_.front().data.size());
+            write_queue_.pop();
+            write_retry_policy_.on_drop();
+            return;
+        case WriteAttemptDecision::ATTEMPT:
+            break;
+    }
+
     BLETXChunk& chunk = write_queue_.front();
-    
+
     auto* client = parent_->parent();
     int gattc_if = client->get_gattc_if();
     uint16_t conn_id = client->get_conn_id();
-    uint16_t handle = parent_->get_write_handle(); // Need public getter on Vehicle
-    
+    uint16_t handle = parent_->get_write_handle();
+
     if (handle == 0) {
         // Not ready
         return;
     }
-    
+
     esp_err_t err = esp_ble_gattc_write_char(
         gattc_if, conn_id, handle,
         chunk.data.size(), chunk.data.data(),
         chunk.write_type, chunk.auth_req
     );
-    
+
     if (err == ESP_OK) {
+        write_retry_policy_.on_success(millis());
         write_queue_.pop();
     } else {
+        write_retry_policy_.on_failure(millis());
         ESP_LOGW(ADAPTER_TAG, "BLE write failed: %s", esp_err_to_name(err));
-        // Retry? 
     }
 }
 
 void BleAdapterImpl::clear_queues() {
     std::queue<BLETXChunk> empty;
     write_queue_.swap(empty);
+    write_retry_policy_.reset();
 }
 
 // --- StorageAdapterImpl ---
@@ -91,11 +117,29 @@ StorageAdapterImpl::~StorageAdapterImpl() {
 bool StorageAdapterImpl::initialize() {
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
+        // Standard recovery for a changed/full NVS layout. Must not abort: a
+        // failed erase would boot-loop the device. Degrading to no
+        // persistence keeps the vehicle connection working; the component
+        // already handles initialize() == false.
+        ESP_LOGW(ADAPTER_TAG, "NVS needs erase (0x%x): erasing NVS partition", (int) err);
+        esp_err_t erase_err = nvs_flash_erase();
+        if (erase_err != ESP_OK) {
+            ESP_LOGE(ADAPTER_TAG, "nvs_flash_erase failed: %s - continuing without persistence",
+                     esp_err_to_name(erase_err));
+            return false;
+        }
         err = nvs_flash_init();
+        if (err != ESP_OK) {
+            ESP_LOGE(ADAPTER_TAG, "nvs_flash_init after erase failed: %s - continuing without persistence",
+                     esp_err_to_name(err));
+            return false;
+        }
     }
-    
-    if (err != ESP_OK) return false;
+
+    if (err != ESP_OK) {
+        ESP_LOGE(ADAPTER_TAG, "nvs_flash_init failed: %s - continuing without persistence", esp_err_to_name(err));
+        return false;
+    }
     
     err = nvs_open("storage", NVS_READWRITE, &storage_handle_);
     if (err != ESP_OK) return false;

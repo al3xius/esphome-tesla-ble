@@ -1,6 +1,6 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
-from esphome.components import ble_client, binary_sensor, button, switch, number, sensor, text_sensor, lock, cover, climate
+from esphome.components import ble_client, binary_sensor, button, switch, number, sensor, text_sensor, lock, cover, climate, select
 from esphome.const import (
     CONF_ACCURACY_DECIMALS,
     CONF_DEVICE_CLASS,
@@ -21,7 +21,7 @@ from esphome import automation
 
 CODEOWNERS = ["@yoziru"]
 DEPENDENCIES = ["ble_client"]
-AUTO_LOAD = ["binary_sensor", "button", "switch", "number", "sensor", "text_sensor", "lock", "cover", "climate"]
+AUTO_LOAD = ["binary_sensor", "button", "switch", "number", "sensor", "text_sensor", "lock", "cover", "climate", "select"]
 
 tesla_ble_vehicle_ns = cg.esphome_ns.namespace("tesla_ble_vehicle")
 TeslaBLEVehicle = tesla_ble_vehicle_ns.class_(
@@ -36,6 +36,8 @@ TeslaRegenerateKeyButton = tesla_ble_vehicle_ns.class_("TeslaRegenerateKeyButton
 TeslaForceUpdateButton = tesla_ble_vehicle_ns.class_("TeslaForceUpdateButton", button.Button)
 TeslaFlashLightsButton = tesla_ble_vehicle_ns.class_("TeslaFlashLightsButton", button.Button)
 TeslaHonkHornButton = tesla_ble_vehicle_ns.class_("TeslaHonkHornButton", button.Button)
+TeslaSoftwareUpdateInstallButton = tesla_ble_vehicle_ns.class_("TeslaSoftwareUpdateInstallButton", button.Button)
+TeslaSoftwareUpdateCancelButton = tesla_ble_vehicle_ns.class_("TeslaSoftwareUpdateCancelButton", button.Button)
 TeslaUnlatchDriverDoorButton = tesla_ble_vehicle_ns.class_("TeslaUnlatchDriverDoorButton", button.Button)
 
 # Custom switch classes - generated via macro in C++, just reference here
@@ -52,6 +54,12 @@ TeslaTrunkCover = tesla_ble_vehicle_ns.class_("TeslaTrunkCover", cover.Cover)
 TeslaFrunkCover = tesla_ble_vehicle_ns.class_("TeslaFrunkCover", cover.Cover)
 TeslaWindowsCover = tesla_ble_vehicle_ns.class_("TeslaWindowsCover", cover.Cover)
 TeslaChargePortDoorCover = tesla_ble_vehicle_ns.class_("TeslaChargePortDoorCover", cover.Cover)
+TeslaSunroofCover = tesla_ble_vehicle_ns.class_("TeslaSunroofCover", cover.Cover)
+
+# Custom select classes
+TeslaSeatClimateSelect = tesla_ble_vehicle_ns.class_("TeslaSeatClimateSelect", select.Select)
+TeslaCabinProtectionSelect = tesla_ble_vehicle_ns.class_("TeslaCabinProtectionSelect", select.Select)
+TeslaCabinTemperatureSelect = tesla_ble_vehicle_ns.class_("TeslaCabinTemperatureSelect", select.Select)
 
 # Custom climate class
 TeslaClimate = tesla_ble_vehicle_ns.class_("TeslaClimate", climate.Climate)
@@ -73,6 +81,7 @@ SetChargingLimitAction = tesla_ble_vehicle_ns.class_("SetChargingLimitAction", a
 CONF_DEVICE_ID = "device_id"
 CONF_VIN = "vin"
 CONF_CHARGING_AMPS_MAX = "charging_amps_max"
+DEFAULT_CHARGING_AMPS_MAX = 32
 CONF_ROLE = "role"
 
 # Polling configuration constants
@@ -80,12 +89,6 @@ CONF_VCSEC_POLL_INTERVAL = "vcsec_poll_interval"
 CONF_INFOTAINMENT_POLL_INTERVAL_AWAKE = "infotainment_poll_interval_awake" 
 CONF_INFOTAINMENT_POLL_INTERVAL_ACTIVE = "infotainment_poll_interval_active"
 CONF_INFOTAINMENT_SLEEP_TIMEOUT = "infotainment_sleep_timeout"
-
-# Tesla key roles
-TESLA_ROLES = {
-    "DRIVER": "Keys_Role_ROLE_DRIVER",
-    "CHARGING_MANAGER": "Keys_Role_ROLE_CHARGING_MANAGER",
-}
 
 # =============================================================================
 # ENTITY DEFINITIONS - Add new sensors/controls here!
@@ -113,6 +116,7 @@ TESLA_ROLES = {
 #   - step: step size
 
 BINARY_SENSORS = [
+    {"id": "pairing_required", "name": "Pairing Required", "device_class": "problem", "entity_category": "diagnostic", "setter": "set_pairing_required_binary_sensor"},
     # VCSEC sensors
     {"id": "asleep", "name": "Asleep", "icon": "mdi:sleep"},
     {"id": "user_present", "name": "User Present", "icon": "mdi:account-check", "device_class": "occupancy"},
@@ -130,7 +134,6 @@ BINARY_SENSORS = [
     {"id": "window_driver_rear", "name": "Window Driver Rear", "icon": "mdi:car-door", "device_class": "window", "disabled_by_default": True},
     {"id": "window_passenger_front", "name": "Window Passenger Front", "icon": "mdi:car-door", "device_class": "window", "disabled_by_default": True},
     {"id": "window_passenger_rear", "name": "Window Passenger Rear", "icon": "mdi:car-door", "device_class": "window", "disabled_by_default": True},
-    {"id": "sunroof", "name": "Sunroof", "icon": "mdi:car-select", "device_class": "window", "disabled_by_default": True},
 
 ]
 
@@ -145,6 +148,8 @@ SENSORS = [
     {"id": "charge_current_request", "name": "Requested Current", "icon": "mdi:current-ac", "device_class": "current", "unit": "A", "entity_category": "diagnostic", "disabled_by_default": True},
     {"id": "vehicle_max_charge_current", "name": "Car Max Acceptable", "icon": "mdi:car-battery", "device_class": "current", "unit": "A"},
     {"id": "charger_phases", "name": "Charger Phases", "icon": "mdi:sine-wave", "unit": "", "accuracy_decimals": 0},
+    {"id": "charger_effective_phases", "name": "Charger Effective Phases", "icon": "mdi:sine-wave", "unit": "", "accuracy_decimals": 0},
+    {"id": "charger_power_estimated", "name": "Charger Power Estimated", "icon": "mdi:flash", "device_class": "power", "unit": "kW", "accuracy_decimals": 2},
     {"id": "charging_rate", "name": "Charging Rate", "icon": "mdi:speedometer", "device_class": "speed", "unit": "mph", "accuracy_decimals": 1},
     {"id": "energy_added", "name": "Energy Added", "icon": "mdi:battery-charging", "device_class": "energy", "unit": "kWh", "accuracy_decimals": 1},
     {"id": "time_to_full", "name": "Time to Full", "icon": "mdi:clock-outline", "device_class": "duration", "unit": "min"},
@@ -167,6 +172,9 @@ TEXT_SENSORS = [
     {"id": "iec61851_state", "name": "IEC 61851", "icon": "mdi:ev-plug-type2", "disabled_by_default": True},
     {"id": "shift_state", "name": "Shift State", "icon": "mdi:car-shift-pattern", "disabled_by_default": True},
     {"id": "charge_limit_reason", "name": "Charge Limit Reason", "icon": "mdi:ev-plug-tesla"},
+    {"id": "software_update", "name": "Software Update", "icon": "mdi:cellphone-arrow-down"},
+    {"id": "software_update_version", "name": "Software Update Version", "icon": "mdi:information-outline", "entity_category": "diagnostic"},
+    {"id": "steering_wheel_heat_mode", "name": "Steering Heat Mode", "icon": "mdi:steering", "entity_category": "diagnostic"},
     {"id": "last_command", "name": "Last Command", "icon": "mdi:history", "entity_category": "diagnostic", "disabled_by_default": True, "setter": "set_last_command_text_sensor"},
 ]
 
@@ -180,6 +188,8 @@ BUTTONS = [
     # Vehicle controls
     {"id": "flash_lights", "name": "Flash Lights", "class": TeslaFlashLightsButton, "setter": None, "icon": "mdi:car-light-high"},
     {"id": "honk_horn", "name": "Sound Horn", "class": TeslaHonkHornButton, "setter": None, "icon": "mdi:bullhorn"},
+    {"id": "software_update_install", "name": "Install Software Update", "class": TeslaSoftwareUpdateInstallButton, "setter": None, "icon": "mdi:cellphone-arrow-down"},
+    {"id": "software_update_cancel", "name": "Cancel Software Update", "class": TeslaSoftwareUpdateCancelButton, "setter": None, "icon": "mdi:close-circle-outline"},
 ]
 
 SWITCHES = [
@@ -200,6 +210,66 @@ COVERS = [
     {"id": "frunk", "name": "Frunk", "class": TeslaFrunkCover, "setter": "set_frunk_cover", "icon": "mdi:car", "device_class": "door"},
     {"id": "windows", "name": "Windows", "class": TeslaWindowsCover, "setter": "set_windows_cover", "icon": "mdi:car-door", "device_class": "awning"},
     {"id": "charge_port_door", "name": "Charge Port Door", "class": TeslaChargePortDoorCover, "setter": "set_charge_port_door_cover", "icon": "mdi:ev-plug-tesla", "device_class": "door"},
+    {"id": "sunroof", "name": "Sunroof", "class": TeslaSunroofCover, "setter": "set_sunroof_cover", "icon": "mdi:car-select", "device_class": "window", "disabled_by_default": True},
+]
+
+# =============================================================================
+# SELECTS - one seat climate control per seat, cabin overheat protection
+# =============================================================================
+# The option order is canonical and must match seat_climate_policy.h:
+#   0 Off | 1-3 Low/Medium/High heat | 4-6 Low/Medium/High cool | 7 Auto
+# A seat has one control: the same levels are heating or cooling, never both,
+# so cooling and Auto options appear only on the seats that support them.
+# "seat" values must match TeslaBLE::SeatPosition in the shared library.
+
+SEAT_POSITIONS = {
+    "front_left": 7,
+    "front_right": 8,
+    "rear_left": 9,
+    "rear_left_back": 10,
+    "rear_center": 11,
+    "rear_right": 12,
+    "rear_right_back": 13,
+    "third_row_left": 14,
+    "third_row_right": 15,
+}
+
+HEAT_OPTIONS = ["Low heat", "Medium heat", "High heat"]
+COOL_OPTIONS = ["Low cool", "Medium cool", "High cool"]
+
+
+def seat_options(cooling, auto):
+    options = ["Off"] + HEAT_OPTIONS
+    if cooling:
+        options += COOL_OPTIONS
+    if auto:
+        options.append("Auto")
+    return options
+
+
+SELECTS = [
+    {"id": "seat_climate_left", "name": "Front Left Seat Climate", "class": TeslaSeatClimateSelect,
+     "seat": "front_left", "cooling": True, "auto": True, "icon": "mdi:car-seat", "options": seat_options(True, True)},
+    {"id": "seat_climate_right", "name": "Front Right Seat Climate", "class": TeslaSeatClimateSelect,
+     "seat": "front_right", "cooling": True, "auto": True, "icon": "mdi:car-seat", "options": seat_options(True, True)},
+    {"id": "seat_climate_rear_left", "name": "Rear Left Seat Heat", "class": TeslaSeatClimateSelect,
+     "seat": "rear_left", "icon": "mdi:car-seat", "options": seat_options(False, False)},
+    {"id": "seat_climate_rear_right", "name": "Rear Right Seat Heat", "class": TeslaSeatClimateSelect,
+     "seat": "rear_right", "icon": "mdi:car-seat", "options": seat_options(False, False)},
+    {"id": "seat_climate_rear_center", "name": "Rear Center Seat Heat", "class": TeslaSeatClimateSelect,
+     "seat": "rear_center", "icon": "mdi:car-seat", "options": seat_options(False, False), "disabled_by_default": True},
+    {"id": "seat_climate_rear_left_back", "name": "Rear Left Backrest Heat", "class": TeslaSeatClimateSelect,
+     "seat": "rear_left_back", "icon": "mdi:car-seat", "options": seat_options(False, False), "disabled_by_default": True},
+    {"id": "seat_climate_rear_right_back", "name": "Rear Right Backrest Heat", "class": TeslaSeatClimateSelect,
+     "seat": "rear_right_back", "icon": "mdi:car-seat", "options": seat_options(False, False), "disabled_by_default": True},
+    {"id": "seat_climate_third_row_left", "name": "Third Row Left Seat Heat", "class": TeslaSeatClimateSelect,
+     "seat": "third_row_left", "icon": "mdi:car-seat", "options": seat_options(False, False), "disabled_by_default": True},
+    {"id": "seat_climate_third_row_right", "name": "Third Row Right Seat Heat", "class": TeslaSeatClimateSelect,
+     "seat": "third_row_right", "icon": "mdi:car-seat", "options": seat_options(False, False), "disabled_by_default": True},
+    {"id": "cabin_overheat_protection", "name": "Cabin Overheat Protection", "class": TeslaCabinProtectionSelect,
+     "setter": "set_cabin_protection_select", "icon": "mdi:car-defrost-front", "options": ["Off", "On", "Fan only"]},
+    {"id": "cop_activation_temperature", "name": "Cabin Overheat Temperature", "class": TeslaCabinTemperatureSelect,
+     "setter": "set_cabin_temperature_select", "icon": "mdi:thermometer", "options": ["Low", "Medium", "High"]},
 ]
 
 # Climate entity
@@ -244,9 +314,10 @@ CONFIG_SCHEMA = (
         {
             cv.GenerateID(CONF_ID): cv.declare_id(TeslaBLEVehicle),
             cv.Required(CONF_VIN): cv.string,
-            cv.Optional(CONF_CHARGING_AMPS_MAX, default=32): cv.int_range(min=1, max=48),
+            cv.Optional(CONF_CHARGING_AMPS_MAX, default=DEFAULT_CHARGING_AMPS_MAX): cv.int_range(min=1, max=48),
+            # C++ start_pairing() maps these roles to Keys_Role_* enums.
             cv.Optional(CONF_DEVICE_ID): cv.sub_device_id,
-            cv.Optional(CONF_ROLE, default="DRIVER"): cv.enum(TESLA_ROLES, upper=True),
+            cv.Optional(CONF_ROLE, default="DRIVER"): cv.one_of("DRIVER", "CHARGING_MANAGER", upper=True),
             # Polling intervals (in seconds)
             cv.Optional(CONF_VCSEC_POLL_INTERVAL, default=10): cv.int_range(min=5, max=300),
             cv.Optional(CONF_INFOTAINMENT_POLL_INTERVAL_AWAKE, default=30): cv.int_range(min=10, max=600),
@@ -275,23 +346,41 @@ def apply_device_id(config, device_id):
         config[CONF_DEVICE_ID] = device_id
 
 
-async def create_binary_sensor(var, definition, device_id=None):
-    """Create a binary sensor and register with TeslaBLEVehicle using generic setter."""
+def _base_config(definition, device_id=None, id_type, suffix):
     config = {
-        CONF_ID: cv.declare_id(binary_sensor.BinarySensor)(f"tesla_{definition['id']}_sensor"),
+        CONF_ID: cv.declare_id(id_type)(f"tesla_{definition['id']}_{suffix}"),
         CONF_NAME: definition["name"],
         CONF_DISABLED_BY_DEFAULT: definition.get("disabled_by_default", False),
     }
     apply_device_id(config, device_id)
     if "icon" in definition:
         config[CONF_ICON] = definition["icon"]
+    if definition.get("entity_category") == "diagnostic":
+        config[CONF_ENTITY_CATEGORY] = ENTITY_CATEGORY_DIAGNOSTIC
+    return config
+
+
+def _with_device_class(config, module, definition):
     if "device_class" in definition:
-        dc = get_device_class_const(binary_sensor, definition["device_class"])
+        dc = get_device_class_const(module, definition["device_class"])
         if dc:
             config[CONF_DEVICE_CLASS] = dc
-    
+    return config
+
+
+def _attach(var, entity, definition):
+    cg.add(entity.set_parent(var))
+    if definition.get("setter"):
+        cg.add(getattr(var, definition["setter"])(entity))
+    return entity
+
+
+async def create_binary_sensor(var, definition):
+    """Create a binary sensor and register with TeslaBLEVehicle using generic setter."""
+    config = _with_device_class(
+        _base_config(definition, binary_sensor.BinarySensor, "sensor"),
+        binary_sensor, definition)
     sens = await binary_sensor.new_binary_sensor(config)
-    # Use generic setter with sensor ID
     cg.add(var.set_binary_sensor(definition["id"], sens))
     return sens
 
@@ -308,26 +397,22 @@ async def create_sensor(var, definition, device_id=None):
 
     if "icon" in definition:
         config[CONF_ICON] = definition["icon"]
+    config = _base_config(definition, sensor.Sensor, "sensor")
+    config[CONF_FORCE_UPDATE] = False
     if "unit" in definition:
         config[CONF_UNIT_OF_MEASUREMENT] = definition["unit"]
     if "accuracy_decimals" in definition:
         config[CONF_ACCURACY_DECIMALS] = definition["accuracy_decimals"]
-    if "device_class" in definition:
-        dc = get_device_class_const(sensor, definition["device_class"])
-        if dc:
-            config[CONF_DEVICE_CLASS] = dc
-    if "entity_category" in definition:
-        if definition["entity_category"] == "diagnostic":
-            config[CONF_ENTITY_CATEGORY] = ENTITY_CATEGORY_DIAGNOSTIC
-    
+    config = _with_device_class(config, sensor, definition)
     sens = await sensor.new_sensor(config)
-    # Use generic setter with sensor ID
     cg.add(var.set_sensor(definition["id"], sens))
     return sens
 
 
 async def create_text_sensor(var, definition, device_id=None):
     """Create a text sensor and register with TeslaBLEVehicle using generic setter."""
+    config = _base_config(definition, text_sensor.TextSensor, "sensor")
+    config[CONF_FORCE_UPDATE] = False
     config = {
         CONF_ID: cv.declare_id(text_sensor.TextSensor)(f"tesla_{definition['id']}_sensor"),
         CONF_NAME: definition["name"],
@@ -351,6 +436,8 @@ async def create_text_sensor(var, definition, device_id=None):
 
 async def create_button(var, definition, device_id=None):
     """Create a button and register with TeslaBLEVehicle."""
+    return _attach(var, await button.new_button(
+        _base_config(definition, definition["class"], "button")), definition)
     config = {
         CONF_ID: cv.declare_id(definition["class"])(f"tesla_{definition['id']}_button"),
         CONF_NAME: definition["name"],
@@ -372,28 +459,18 @@ async def create_button(var, definition, device_id=None):
 
 async def create_switch(var, definition, device_id=None):
     """Create a switch and register with TeslaBLEVehicle."""
-    config = {
-        CONF_ID: cv.declare_id(definition["class"])(f"tesla_{definition['id']}_switch"),
-        CONF_NAME: definition["name"],
-        CONF_DISABLED_BY_DEFAULT: definition.get("disabled_by_default", False),
-        CONF_RESTORE_MODE: switch.RESTORE_MODES['RESTORE_DEFAULT_OFF'],
-    }
-    apply_device_id(config, device_id)
-    if "icon" in definition:
-        config[CONF_ICON] = definition["icon"]
-    
-    sw = await switch.new_switch(config)
-    cg.add(sw.set_parent(var))
-    if definition.get("setter"):
-        cg.add(getattr(var, definition["setter"])(sw))
-    return sw
+    config = _base_config(definition, definition["class"], "switch")
+    config[CONF_RESTORE_MODE] = switch.RESTORE_MODES['RESTORE_DEFAULT_OFF']
+    return _attach(var, await switch.new_switch(config), definition)
 
 
 async def create_number(var, definition, config, device_id=None):
     """Create a number and register with TeslaBLEVehicle."""
-    # Handle dynamic max value from config
     max_val = definition["max"]
     if max_val == "config":
+        max_val = config.get(CONF_CHARGING_AMPS_MAX, DEFAULT_CHARGING_AMPS_MAX)
+    num_config = _base_config(definition, definition["class"], "number")
+    num_config[CONF_MODE] = number.NUMBER_MODES['AUTO']
         max_val = config.get(CONF_CHARGING_AMPS_MAX, 32)
     
     num_config = {
@@ -407,17 +484,13 @@ async def create_number(var, definition, config, device_id=None):
         num_config[CONF_ICON] = definition["icon"]
     if "unit" in definition:
         num_config[CONF_UNIT_OF_MEASUREMENT] = definition["unit"]
-    
     num = await number.new_number(
         num_config,
         min_value=definition["min"],
         max_value=max_val,
         step=definition["step"]
     )
-    cg.add(num.set_parent(var))
-    if definition.get("setter"):
-        cg.add(getattr(var, definition["setter"])(num))
-    return num
+    return _attach(var, num, definition)
 
 
 async def create_lock(var, definition, device_id=None):
@@ -433,14 +506,12 @@ async def create_lock(var, definition, device_id=None):
     
     lck = cg.new_Pvariable(config[CONF_ID])
     await lock.register_lock(lck, config)
-    cg.add(lck.set_parent(var))
-    if definition.get("setter"):
-        cg.add(getattr(var, definition["setter"])(lck))
-    return lck
+    return _attach(var, lck, definition)
 
 
 async def create_cover(var, definition, device_id=None):
     """Create a cover and register with TeslaBLEVehicle."""
+    config = _base_config(definition, definition["class"], "cover")
     config = {
         CONF_ID: cv.declare_id(definition["class"])(f"tesla_{definition['id']}_cover"),
         CONF_NAME: definition["name"],
@@ -451,36 +522,35 @@ async def create_cover(var, definition, device_id=None):
         config[CONF_ICON] = definition["icon"]
     if "device_class" in definition:
         config[CONF_DEVICE_CLASS] = definition["device_class"]
-    
     cvr = cg.new_Pvariable(config[CONF_ID])
     await cover.register_cover(cvr, config)
-    cg.add(cvr.set_parent(var))
-    if definition.get("setter"):
-        cg.add(getattr(var, definition["setter"])(cvr))
-    return cvr
+    return _attach(var, cvr, definition)
 
 
 async def create_climate_entity(var, definition, device_id=None):
     """Create a climate entity and register with TeslaBLEVehicle."""
     from esphome.components.climate import CONF_VISUAL
-    
-    config = {
-        CONF_ID: cv.declare_id(definition["class"])(f"tesla_{definition['id']}_climate"),
-        CONF_NAME: definition["name"],
-        CONF_DISABLED_BY_DEFAULT: False,
-        # Visual settings for the climate entity UI
-        CONF_VISUAL: {},
-        CONF_ACCURACY_DECIMALS: 1,
-    }
-    apply_device_id(config, device_id)
-    
+    config = _base_config(definition, definition["class"], "climate")
+    config.update({CONF_VISUAL: {}, CONF_ACCURACY_DECIMALS: 1})
     clm = cg.new_Pvariable(config[CONF_ID])
     await climate.register_climate(clm, config)
-    cg.add(clm.set_parent(var))
-    if definition.get("setter"):
-        cg.add(getattr(var, definition["setter"])(clm))
-    return clm
+    return _attach(var, clm, definition)
 
+
+async def create_select(var, definition):
+    """Create a select and register with TeslaBLEVehicle."""
+    config = _base_config(definition, definition["class"], "select")
+    sel = await select.new_select(config, options=definition["options"])
+    cg.add(sel.set_parent(var))
+    if "seat" in definition:
+        seat = SEAT_POSITIONS[definition["seat"]]
+        cg.add(sel.set_seat(seat))
+        cg.add(sel.set_cooling_supported(definition.get("cooling", False)))
+        cg.add(sel.set_auto_supported(definition.get("auto", False)))
+        cg.add(var.set_seat_select(seat, sel))
+    elif definition.get("setter"):
+        cg.add(getattr(var, definition["setter"])(sel))
+    return sel
 
 # =============================================================================
 # CODE GENERATION
@@ -499,7 +569,7 @@ async def to_code(config):
     vcsec_interval_seconds = config[CONF_VCSEC_POLL_INTERVAL]
     
     cg.add(var.set_update_interval(vcsec_interval_seconds * 1000))
-    cg.add(var.set_role(TESLA_ROLES[role]))
+    cg.add(var.set_role(role))
     cg.add(var.set_charging_amps_max(charging_amps_max))
     
     # Set polling intervals (convert from seconds to milliseconds)
@@ -547,21 +617,14 @@ async def to_code(config):
 # ACTION SCHEMAS
 # =============================================================================
 
-TESLA_WAKE_ACTION_SCHEMA = cv.Schema({
+_SIMPLE_ACTION_SCHEMA = cv.Schema({
     cv.Required(CONF_ID): cv.use_id(TeslaBLEVehicle),
 })
 
-TESLA_PAIR_ACTION_SCHEMA = cv.Schema({
-    cv.Required(CONF_ID): cv.use_id(TeslaBLEVehicle),
-})
-
-TESLA_REGENERATE_KEY_ACTION_SCHEMA = cv.Schema({
-    cv.Required(CONF_ID): cv.use_id(TeslaBLEVehicle),
-})
-
-TESLA_FORCE_UPDATE_ACTION_SCHEMA = cv.Schema({
-    cv.Required(CONF_ID): cv.use_id(TeslaBLEVehicle),
-})
+TESLA_WAKE_ACTION_SCHEMA = _SIMPLE_ACTION_SCHEMA
+TESLA_PAIR_ACTION_SCHEMA = _SIMPLE_ACTION_SCHEMA
+TESLA_REGENERATE_KEY_ACTION_SCHEMA = _SIMPLE_ACTION_SCHEMA
+TESLA_FORCE_UPDATE_ACTION_SCHEMA = _SIMPLE_ACTION_SCHEMA
 
 TESLA_SET_CHARGING_ACTION_SCHEMA = cv.Schema({
     cv.Required(CONF_ID): cv.use_id(TeslaBLEVehicle),
@@ -583,66 +646,63 @@ TESLA_SET_CHARGING_LIMIT_ACTION_SCHEMA = cv.Schema({
 # ACTION REGISTRATION
 # =============================================================================
 
+async def _simple_to_code(config, action_id, template_arg):
+    paren = await cg.get_variable(config[CONF_ID])
+    return cg.new_Pvariable(action_id, template_arg, paren)
+
+
+async def _param_to_code(config, action_id, template_arg, args, key, setter, ctype):
+    paren = await cg.get_variable(config[CONF_ID])
+    var = cg.new_Pvariable(action_id, template_arg, paren)
+    template_ = await cg.templatable(config[key], args, ctype)
+    cg.add(getattr(var, setter)(template_))
+    return var
+
+
 @automation.register_action(
     "tesla_ble_vehicle.wake", WakeAction, TESLA_WAKE_ACTION_SCHEMA, synchronous=True
 )
 async def tesla_wake_to_code(config, action_id, template_arg, args):
-    paren = await cg.get_variable(config[CONF_ID])
-    return cg.new_Pvariable(action_id, template_arg, paren)
+    return await _simple_to_code(config, action_id, template_arg)
 
 
 @automation.register_action(
     "tesla_ble_vehicle.pair", PairAction, TESLA_PAIR_ACTION_SCHEMA, synchronous=True
 )
 async def tesla_pair_to_code(config, action_id, template_arg, args):
-    paren = await cg.get_variable(config[CONF_ID])
-    return cg.new_Pvariable(action_id, template_arg, paren)
+    return await _simple_to_code(config, action_id, template_arg)
 
 
 @automation.register_action(
     "tesla_ble_vehicle.regenerate_key", RegenerateKeyAction, TESLA_REGENERATE_KEY_ACTION_SCHEMA, synchronous=True
 )
 async def tesla_regenerate_key_to_code(config, action_id, template_arg, args):
-    paren = await cg.get_variable(config[CONF_ID])
-    return cg.new_Pvariable(action_id, template_arg, paren)
+    return await _simple_to_code(config, action_id, template_arg)
 
 
 @automation.register_action(
     "tesla_ble_vehicle.force_update", ForceUpdateAction, TESLA_FORCE_UPDATE_ACTION_SCHEMA, synchronous=True
 )
 async def tesla_force_update_to_code(config, action_id, template_arg, args):
-    paren = await cg.get_variable(config[CONF_ID])
-    return cg.new_Pvariable(action_id, template_arg, paren)
+    return await _simple_to_code(config, action_id, template_arg)
 
 
 @automation.register_action(
     "tesla_ble_vehicle.set_charging", SetChargingAction, TESLA_SET_CHARGING_ACTION_SCHEMA, synchronous=True
 )
 async def tesla_set_charging_to_code(config, action_id, template_arg, args):
-    paren = await cg.get_variable(config[CONF_ID])
-    var = cg.new_Pvariable(action_id, template_arg, paren)
-    template_ = await cg.templatable(config["state"], args, bool)
-    cg.add(var.set_state(template_))
-    return var
+    return await _param_to_code(config, action_id, template_arg, args, "state", "set_state", bool)
 
 
 @automation.register_action(
     "tesla_ble_vehicle.set_charging_amps", SetChargingAmpsAction, TESLA_SET_CHARGING_AMPS_ACTION_SCHEMA, synchronous=True
 )
 async def tesla_set_charging_amps_to_code(config, action_id, template_arg, args):
-    paren = await cg.get_variable(config[CONF_ID])
-    var = cg.new_Pvariable(action_id, template_arg, paren)
-    template_ = await cg.templatable(config["amps"], args, int)
-    cg.add(var.set_amps(template_))
-    return var
+    return await _param_to_code(config, action_id, template_arg, args, "amps", "set_amps", int)
 
 
 @automation.register_action(
     "tesla_ble_vehicle.set_charging_limit", SetChargingLimitAction, TESLA_SET_CHARGING_LIMIT_ACTION_SCHEMA, synchronous=True
 )
 async def tesla_set_charging_limit_to_code(config, action_id, template_arg, args):
-    paren = await cg.get_variable(config[CONF_ID])
-    var = cg.new_Pvariable(action_id, template_arg, paren)
-    template_ = await cg.templatable(config["limit"], args, int)
-    cg.add(var.set_limit(template_))
-    return var
+    return await _param_to_code(config, action_id, template_arg, args, "limit", "set_limit", int)
